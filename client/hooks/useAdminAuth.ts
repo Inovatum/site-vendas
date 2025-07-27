@@ -1,7 +1,7 @@
 "use client"
 
-import { useState } from "react"
-import { supabase } from "@/lib/supabase"
+import { useState, useCallback } from "react" // Importar useCallback
+import { supabase, debugSupabaseError, formatError } from "@/lib/supabase" // formatError também vem de supabase.ts agora
 
 export interface AdminUser {
   id: number
@@ -21,151 +21,179 @@ export function useAdminAuth() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Fazer login com debug completo
-  const login = async (credentials: LoginCredentials): Promise<boolean> => {
-    try {
-      setLoading(true)
-      setError(null)
-
-      console.log("🔐 Iniciando login para:", credentials.username)
-
-      // Validação básica
-      if (!credentials.username.trim() || !credentials.password.trim()) {
-        setError("Usuário e senha são obrigatórios")
-        return false
+  // Fallback para autenticação simples quando banco não está configurado
+  const loginFallback = useCallback(async (credentials: LoginCredentials): Promise<boolean> => {
+    console.log("🔄 Usando autenticação simples como fallback")
+    // Usar credenciais hardcoded como fallback
+    if (credentials.username === "admin" && credentials.password === "bella123") {
+      const fallbackUser: AdminUser = {
+        id: 1,
+        username: "admin",
+        email: "admin@minhaloja.com",
+        full_name: "Administrador",
+        is_active: true,
       }
+      setUser(fallbackUser)
+      localStorage.setItem("admin_authenticated", "true")
+      localStorage.setItem("admin_user", JSON.stringify(fallbackUser))
+      console.log("✅ Login fallback válido")
+      return true
+    } else {
+      console.log("❌ Credenciais fallback inválidas")
+      setError("Usuário ou senha incorretos (usando autenticação simples)")
+      return false
+    }
+  }, []) // Dependência vazia, pois não depende de nenhum estado/prop externo
 
-      // MÉTODO 1: Tentar função do Supabase
-      console.log("📡 Tentando função validate_admin_login...")
-
+  // Fazer login
+  const login = useCallback(
+    async (credentials: LoginCredentials): Promise<boolean> => {
       try {
+        setLoading(true)
+        setError(null)
+
+        // Validação básica
+        if (!credentials.username.trim() || !credentials.password.trim()) {
+          setError("Usuário e senha são obrigatórios")
+          return false
+        }
+
+        console.log("🔐 Tentando login admin:", credentials.username)
+
+        // Chamar função do banco para validar login
         const { data, error } = await supabase.rpc("validate_admin_login", {
           input_username: credentials.username,
           input_password: credentials.password,
         })
 
-        console.log("📡 Resposta da função:", { data, error })
-
         if (error) {
-          console.error("❌ Erro na função:", error)
-          throw new Error(`Erro na função: ${error.message}`)
-        }
+          debugSupabaseError(error, "validate_admin_login")
+          console.error("❌ Erro na validação:", formatError(error))
 
-        if (data && Array.isArray(data) && data.length > 0) {
-          const adminUser = data[0] as AdminUser
-          console.log("✅ Login válido via função:", adminUser)
-
-          setUser(adminUser)
-          localStorage.setItem("admin_authenticated", "true")
-          localStorage.setItem("admin_user", JSON.stringify(adminUser))
-          return true
-        } else {
-          console.log("❌ Função retornou array vazio")
-        }
-      } catch (funcError) {
-        console.error("❌ Erro ao chamar função:", funcError)
-      }
-
-      // MÉTODO 2: Query direta na tabela
-      console.log("📊 Tentando query direta na tabela...")
-
-      try {
-        const { data: userData, error: queryError } = await supabase
-          .from("admin_users")
-          .select("id, username, is_active")
-          .eq("username", credentials.username)
-          .eq("password_hash", credentials.password)
-          .eq("is_active", true)
-          .single()
-
-        console.log("📊 Resposta da query:", { userData, queryError })
-
-        if (queryError) {
-          console.error("❌ Erro na query:", queryError)
-        } else if (userData) {
-          const adminUser: AdminUser = {
-            id: userData.id,
-            username: userData.username,
-            email: `${userData.username}@minhaloja.com`,
-            full_name: "Administrador",
-            is_active: userData.is_active,
+          // Verificar se é erro de função não encontrada e usar fallback
+          const errorMsg = formatError(error)
+          if (errorMsg.includes("function") && errorMsg.includes("does not exist")) {
+            console.warn("⚠️ Função SQL não existe, usando autenticação simples como fallback")
+            return await loginFallback(credentials)
           }
 
-          console.log("✅ Login válido via query:", adminUser)
+          throw new Error(errorMsg)
+        }
+
+        // A função agora retorna um array de objetos ou array vazio
+        if (data && Array.isArray(data) && data.length > 0) {
+          const adminUser = data[0] as AdminUser
+          console.log("✅ Login válido:", adminUser.username)
 
           setUser(adminUser)
+
+          // Salvar no localStorage para manter sessão
           localStorage.setItem("admin_authenticated", "true")
           localStorage.setItem("admin_user", JSON.stringify(adminUser))
+
           return true
+        } else {
+          console.log("❌ Credenciais inválidas - função retornou array vazio")
+          setError("Usuário ou senha incorretos")
+          return false
         }
-      } catch (queryError) {
-        console.error("❌ Erro na query direta:", queryError)
+      } catch (err) {
+        console.error("❌ Erro no login:", formatError(err))
+        const errorMessage = formatError(err) || "Erro ao fazer login"
+
+        // Se houver erro, tentar fallback
+        console.warn("⚠️ Erro na autenticação do banco, tentando fallback...")
+        return await loginFallback(credentials)
+      } finally {
+        setLoading(false)
       }
-
-      // MÉTODO 3: Fallback hardcoded
-      console.log("🔄 Usando fallback hardcoded...")
-
-      if (credentials.username === "admin" && credentials.password === "bella123") {
-        const fallbackUser: AdminUser = {
-          id: 1,
-          username: "admin",
-          email: "admin@minhaloja.com",
-          full_name: "Administrador",
-          is_active: true,
-        }
-
-        console.log("✅ Login válido via fallback:", fallbackUser)
-
-        setUser(fallbackUser)
-        localStorage.setItem("admin_authenticated", "true")
-        localStorage.setItem("admin_user", JSON.stringify(fallbackUser))
-        return true
-      }
-
-      // Se chegou até aqui, credenciais são inválidas
-      console.log("❌ Todas as tentativas falharam")
-      setError("Usuário ou senha incorretos")
-      return false
-    } catch (err) {
-      console.error("❌ Erro geral no login:", err)
-      setError("Erro interno do sistema")
-      return false
-    } finally {
-      setLoading(false)
-    }
-  }
+    },
+    [loginFallback],
+  ) // login depende de loginFallback
 
   // Fazer logout
-  const logout = () => {
+  const logout = useCallback(() => {
     setUser(null)
     localStorage.removeItem("admin_authenticated")
     localStorage.removeItem("admin_user")
     console.log("👋 Logout realizado")
-  }
+  }, []) // Dependência vazia
 
-  // Verificar se está autenticado
-  const checkAuth = (): boolean => {
+  // Verificar se está autenticado (restaurar sessão)
+  const checkAuth = useCallback((): boolean => {
     try {
       const isAuth = localStorage.getItem("admin_authenticated")
       const userData = localStorage.getItem("admin_user")
 
       if (isAuth === "true" && userData) {
-        const adminUser = JSON.parse(userData) as AdminUser
-        setUser(adminUser)
-        return true
+        try {
+          const adminUser = JSON.parse(userData) as AdminUser
+          // Apenas define o usuário se for diferente para evitar re-renders desnecessários
+          if (!user || user.id !== adminUser.id || user.username !== adminUser.username) {
+            setUser(adminUser)
+          }
+          return true
+        } catch (parseError) {
+          console.error("Erro ao fazer parse dos dados do usuário:", parseError)
+          // Limpar dados corrompidos
+          localStorage.removeItem("admin_authenticated")
+          localStorage.removeItem("admin_user")
+          return false
+        }
+      }
+      // Se não autenticado ou dados ausentes, garante que o estado do usuário seja null
+      if (user !== null) {
+        setUser(null)
       }
       return false
     } catch (error) {
-      console.error("Erro ao verificar autenticação:", error)
+      console.error("Erro ao verificar autenticação:", formatError(error))
       return false
     }
-  }
+  }, [user]) // Dependência em 'user' para verificar se o estado precisa ser atualizado
 
-  // Trocar senha (simplificado)
-  const changePassword = async (oldPassword: string, newPassword: string): Promise<boolean> => {
-    console.log("Função de trocar senha ainda não implementada")
-    return false
-  }
+  // Trocar senha
+  const changePassword = useCallback(
+    async (oldPassword: string, newPassword: string): Promise<boolean> => {
+      try {
+        if (!user) {
+          setError("Usuário não está logado")
+          return false
+        }
+
+        setLoading(true)
+        setError(null)
+
+        const { data, error } = await supabase.rpc("change_admin_password", {
+          p_username: user.username,
+          p_old_password: oldPassword,
+          p_new_password: newPassword,
+        })
+
+        if (error) {
+          debugSupabaseError(error, "change_admin_password")
+          console.error("❌ Erro ao trocar senha:", formatError(error))
+          throw new Error(formatError(error))
+        }
+
+        if (data === true) {
+          console.log("✅ Senha alterada com sucesso")
+          return true
+        } else {
+          setError("Senha atual incorreta")
+          return false
+        }
+      } catch (err) {
+        console.error("❌ Erro ao trocar senha:", formatError(err))
+        const errorMessage = formatError(err) || "Erro ao trocar senha"
+        setError(errorMessage)
+        return false
+      } finally {
+        setLoading(false)
+      }
+    },
+    [user],
+  ) // Dependência em 'user'
 
   return {
     user,
