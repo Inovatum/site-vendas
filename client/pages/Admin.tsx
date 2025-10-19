@@ -44,6 +44,24 @@ function darkenColor(hex: string, percent: number): string {
 }
 
 export default function Index() {
+  const navigate = useNavigate()
+  const { isAuthenticated, checkAuth } = useAdminAuth()
+
+  useEffect(() => {
+    // Ensure auth state is checked and redirect to login if not authenticated
+    try {
+      const auth = checkAuth()
+      if (!auth) {
+        navigate('/admin-login')
+        return
+      }
+    } catch (e) {
+      navigate('/admin-login')
+      return
+    }
+
+  }, [isAuthenticated, checkAuth, navigate])
+
   const [cart, setCart] = useState<CartItem[]>([])
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
@@ -673,7 +691,7 @@ export default function Index() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Nossos Produtos</h1>
-          <p className="text-gray-600">Descubra as últimas tend��ncias da moda e perfumes exclusivos</p>
+          <p className="text-gray-600">Descubra as últimas tendências da moda e perfumes exclusivos</p>
           {/* Connection Status */}
           {!isConnected && (
             <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
