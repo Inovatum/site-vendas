@@ -346,10 +346,16 @@ export default function Index() {
       try {
         const finalPrice = getFinalPrice()
         console.log(`Chamando Edge Function para gerar PIX com valor: ${finalPrice}`)
-        const response = await fetch("https://dkzbhymqatlnwkdhjyzd.supabase.co/functions/v1/generate-pix", {
+        // Build function URL from configured supabase url (fallback to example project)
+        const functionBase = SUPABASE_URL ? SUPABASE_URL.replace(/\/+$/, "") : "https://dkzbhymqatlnwkdhjyzd.supabase.co"
+        const functionUrl = `${functionBase}/functions/v1/generate-pix`
+
+        const response = await fetch(functionUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            // Provide anon key to the function (required if function is not public)
+            ...(SUPABASE_ANON_KEY ? { Authorization: `Bearer ${SUPABASE_ANON_KEY}`, apikey: SUPABASE_ANON_KEY } : {}),
           },
           body: JSON.stringify({ amount: finalPrice }),
         })
