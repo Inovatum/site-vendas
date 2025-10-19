@@ -70,10 +70,13 @@ export function useAdminAuth() {
           debugSupabaseError(error, "validate_admin_login")
           console.error("❌ Erro na validação:", formatError(error))
 
-          // Verificar se é erro de função não encontrada e usar fallback
+          // Detect common RPC-missing or signature errors and use fallback
           const errorMsg = formatError(error)
-          if (errorMsg.includes("function") && errorMsg.includes("does not exist")) {
-            console.warn("⚠️ Função SQL não existe, usando autenticação simples como fallback")
+          const errCode = (error as any)?.code
+          const isMissingFn = errCode === "PGRST202" || /could not find the function/i.test(errorMsg) || /does not exist/i.test(errorMsg) || /validate_admin_login/i.test(errorMsg)
+
+          if (isMissingFn) {
+            console.warn("⚠️ Função SQL validate_admin_login ausente ou incompatível, usando autenticação simples como fallback")
             return await loginFallback(credentials)
           }
 
