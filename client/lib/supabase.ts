@@ -6,8 +6,8 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js"
 
 const metaEnv = typeof import.meta !== 'undefined' ? (import.meta as any).env ?? {} : {};
 const nodeEnv = typeof process !== 'undefined' ? (process as any).env ?? {} : {};
-const supabaseUrl = metaEnv?.VITE_SUPABASE_URL ?? metaEnv?.NEXT_PUBLIC_SUPABASE_URL ?? nodeEnv?.NEXT_PUBLIC_SUPABASE_URL ?? nodeEnv?.VITE_SUPABASE_URL;
-const supabaseAnonKey = metaEnv?.VITE_SUPABASE_ANON_KEY ?? metaEnv?.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? nodeEnv?.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? nodeEnv?.VITE_SUPABASE_ANON_KEY;
+export const supabaseUrl = metaEnv?.VITE_SUPABASE_URL ?? metaEnv?.NEXT_PUBLIC_SUPABASE_URL ?? nodeEnv?.NEXT_PUBLIC_SUPABASE_URL ?? nodeEnv?.VITE_SUPABASE_URL;
+export const supabaseAnonKey = metaEnv?.VITE_SUPABASE_ANON_KEY ?? metaEnv?.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? nodeEnv?.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? nodeEnv?.VITE_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error("Missing Supabase environment variables.")
