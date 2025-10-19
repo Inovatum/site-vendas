@@ -1,35 +1,51 @@
-"use client"
+"use client";
 
-import { useState } from "react"
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, Loader2, QrCode } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Link } from "react-router-dom"
-import { useProducts } from "@/hooks/useProducts"
-import { useStoreSettings } from "@/hooks/useStoreSettings"
-import { useStoreCustomization } from "@/hooks/useStoreCustomization"
-import { useCategories } from "@/hooks/useCategories"
-import DynamicStyles from "@/components/DynamicStyles"
-import { supabase } from "@/lib/supabase" // Importar supabase client
-import type { Product } from "@/lib/supabase"
-import { useToast } from "@/hooks/use-toast"
-import PixModal from "@/components/PixModal"
+import { useState } from "react";
+import {
+  ShoppingCart,
+  Search,
+  X,
+  Plus,
+  Minus,
+  Trash2,
+  Loader2,
+  QrCode,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Link } from "react-router-dom";
+import { useProducts } from "@/hooks/useProducts";
+import { useStoreSettings } from "@/hooks/useStoreSettings";
+import { useStoreCustomization } from "@/hooks/useStoreCustomization";
+import { useCategories } from "@/hooks/useCategories";
+import DynamicStyles from "@/components/DynamicStyles";
+import {
+  supabase,
+  supabaseUrl as SUPABASE_URL,
+  supabaseAnonKey as SUPABASE_ANON_KEY,
+} from "@/lib/supabase"; // Importar supabase client and envs
+import type { Product } from "@/lib/supabase";
+import { useToast } from "@/hooks/use-toast";
+import PixModal from "@/components/PixModal";
+import { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAdminAuth } from "@/hooks/useAdminAuth";
 
 interface CartItem extends Product {
-  quantity: number
-  selectedSize?: string
-  selectedColor?: string
+  quantity: number;
+  selectedSize?: string;
+  selectedColor?: string;
 }
 
 // Função auxiliar para escurecer cor
 function darkenColor(hex: string, percent: number): string {
-  if (!hex || !hex.startsWith("#")) return hex
-  const num = Number.parseInt(hex.slice(1), 16)
-  const amt = Math.round(2.55 * percent)
-  const R = (num >> 16) - amt
-  const G = ((num >> 8) & 0x00ff) - amt
-  const B = (num & 0x0000ff) - amt
+  if (!hex || !hex.startsWith("#")) return hex;
+  const num = Number.parseInt(hex.slice(1), 16);
+  const amt = Math.round(2.55 * percent);
+  const R = (num >> 16) - amt;
+  const G = ((num >> 8) & 0x00ff) - amt;
+  const B = (num & 0x0000ff) - amt;
   return `#${(
     0x1000000 +
     (R < 255 ? (R < 1 ? 0 : R) : 255) * 0x10000 +
@@ -37,82 +53,113 @@ function darkenColor(hex: string, percent: number): string {
     (B < 255 ? (B < 1 ? 0 : B) : 255)
   )
     .toString(16)
-    .slice(1)}`
+    .slice(1)}`;
 }
 
 export default function Index() {
-  const [cart, setCart] = useState<CartItem[]>([])
-  const [isCartOpen, setIsCartOpen] = useState(false)
-  const [searchTerm, setSearchTerm] = useState("")
-  const [selectedCategory, setSelectedCategory] = useState("Todos")
-  const [selectedSizes, setSelectedSizes] = useState<{ [key: number]: string }>({})
-  const [activeImages, setActiveImages] = useState<{ [key: number]: number }>({})
-  const [isPixModalOpen, setIsPixModalOpen] = useState(false)
-  const [dynamicPixCode, setDynamicPixCode] = useState<string | null>(null) // Novo estado para o código PIX dinâmico
-  const [dynamicQrCodeUrl, setDynamicQrCodeUrl] = useState<string | null>(null) // Novo estado para a URL do QR Code dinâmico
-  const [isGeneratingPix, setIsGeneratingPix] = useState(false) // Novo estado para loading do PIX
+  const navigate = useNavigate();
+  const { isAuthenticated, checkAuth } = useAdminAuth();
+
+  useEffect(() => {
+    // Ensure auth state is checked and redirect to login if not authenticated
+    try {
+      const auth = checkAuth();
+      if (!auth) {
+        navigate("/admin-login");
+        return;
+      }
+    } catch (e) {
+      navigate("/admin-login");
+      return;
+    }
+  }, [isAuthenticated, checkAuth, navigate]);
+
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("Todos");
+  const [selectedSizes, setSelectedSizes] = useState<{ [key: number]: string }>(
+    {},
+  );
+  const [activeImages, setActiveImages] = useState<{ [key: number]: number }>(
+    {},
+  );
+  const [isPixModalOpen, setIsPixModalOpen] = useState(false);
+  const [dynamicPixCode, setDynamicPixCode] = useState<string | null>(null); // Novo estado para o código PIX dinâmico
+  const [dynamicQrCodeUrl, setDynamicQrCodeUrl] = useState<string | null>(null); // Novo estado para a URL do QR Code dinâmico
+  const [isGeneratingPix, setIsGeneratingPix] = useState(false); // Novo estado para loading do PIX
   // NOVOS ESTADOS PARA CUPOM
-  const [couponInput, setCouponInput] = useState("")
+  const [couponInput, setCouponInput] = useState("");
   const [appliedCoupon, setAppliedCoupon] = useState<{
-    code: string
-    type: "percentage" | "fixed"
-    value: number
-    usageLimit: number | null // NOVO: Limite de uso
-  } | null>(null)
+    code: string;
+    type: "percentage" | "fixed";
+    value: number;
+    usageLimit: number | null; // NOVO: Limite de uso
+  } | null>(null);
   // FIM NOVOS ESTADOS PARA CUPOM
 
-  const { products, loading, error, isConnected } = useProducts()
-  const { settings, fetchSettings } = useStoreSettings() // Importar fetchSettings para revalidar
-  const { customization, loading: customizationLoading } = useStoreCustomization()
-  const { activeCategories } = useCategories()
-  const { toast } = useToast()
+  const { products, loading, error, isConnected } = useProducts();
+  const { settings, fetchSettings } = useStoreSettings(); // Importar fetchSettings para revalidar
+  const { customization, loading: customizationLoading } =
+    useStoreCustomization();
+  const { activeCategories } = useCategories();
+  const { toast } = useToast();
 
   // Só mostrar produtos ativos na loja
-  const activeProducts = products.filter((product) => product.status === "active")
+  const activeProducts = products.filter(
+    (product) => product.status === "active",
+  );
 
   // Usar categorias do banco (com fallback para categorias dos produtos se não houver no banco)
   const categories =
     activeCategories.length > 0
       ? ["Todos", ...activeCategories.map((cat) => cat.name)]
-      : ["Todos", ...Array.from(new Set(products.map((p) => p.category)))]
+      : ["Todos", ...Array.from(new Set(products.map((p) => p.category)))];
 
   const filteredProducts = activeProducts.filter((product) => {
-    const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory
-    return matchesSearch && matchesCategory
-  })
+    const matchesSearch = product.name
+      .toLowerCase()
+      .includes(searchTerm.toLowerCase());
+    const matchesCategory =
+      selectedCategory === "Todos" || product.category === selectedCategory;
+    return matchesSearch && matchesCategory;
+  });
 
   const addToCart = (product: Product) => {
     // Verificar se está conectado ao banco
     if (!isConnected) {
       toast({
         title: "Erro de Conexão",
-        description: "Não é possível adicionar ao carrinho: banco de dados offline",
+        description:
+          "Não é possível adicionar ao carrinho: banco de dados offline",
         variant: "destructive",
-      })
-      return
+      });
+      return;
     }
     // Verificar se o produto tem tamanhos e se um foi selecionado
     if (product.sizes && product.sizes.length > 0) {
-      const selectedSize = selectedSizes[product.id]
+      const selectedSize = selectedSizes[product.id];
       if (!selectedSize) {
         toast({
           title: "Tamanho Obrigatório",
-          description: "Por favor, selecione um tamanho antes de adicionar ao carrinho.",
+          description:
+            "Por favor, selecione um tamanho antes de adicionar ao carrinho.",
           variant: "destructive",
-        })
-        return
+        });
+        return;
       }
     }
-    const selectedSize = selectedSizes[product.id]
+    const selectedSize = selectedSizes[product.id];
     setCart((prev) => {
-      const existingItem = prev.find((item) => item.id === product.id && item.selectedSize === selectedSize)
+      const existingItem = prev.find(
+        (item) => item.id === product.id && item.selectedSize === selectedSize,
+      );
       if (existingItem) {
         return prev.map((item) =>
           item.id === product.id && item.selectedSize === selectedSize
             ? { ...item, quantity: item.quantity + 1 }
             : item,
-        )
+        );
       }
       return [
         ...prev,
@@ -121,99 +168,110 @@ export default function Index() {
           quantity: 1,
           selectedSize: selectedSize,
         },
-      ]
-    })
+      ];
+    });
     // Limpar seleção de tamanho após adicionar
     if (product.sizes && product.sizes.length > 0) {
-      setSelectedSizes((prev) => ({ ...prev, [product.id]: "" }))
+      setSelectedSizes((prev) => ({ ...prev, [product.id]: "" }));
     }
     // Toast de sucesso
     toast({
       title: "Produto Adicionado",
       description: `${product.name} foi adicionado ao carrinho!`,
       variant: "default",
-    })
-  }
+    });
+  };
 
   const updateQuantity = (id: number, quantity: number) => {
     if (quantity <= 0) {
-      setCart((prev) => prev.filter((item) => item.id !== id))
+      setCart((prev) => prev.filter((item) => item.id !== id));
     } else {
-      setCart((prev) => prev.map((item) => (item.id === id ? { ...item, quantity } : item)))
+      setCart((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, quantity } : item)),
+      );
     }
-  }
+  };
 
   const removeFromCart = (id: number) => {
-    setCart((prev) => prev.filter((item) => item.id !== id))
-  }
+    setCart((prev) => prev.filter((item) => item.id !== id));
+  };
 
   const getTotalPrice = () => {
-    return cart.reduce((total, item) => total + item.price * item.quantity, 0)
-  }
+    return cart.reduce((total, item) => total + item.price * item.quantity, 0);
+  };
 
   const getFinalPrice = () => {
-    let total = getTotalPrice()
+    let total = getTotalPrice();
     if (appliedCoupon) {
       if (appliedCoupon.type === "percentage") {
-        total = total * (1 - appliedCoupon.value)
+        total = total * (1 - appliedCoupon.value);
       } else if (appliedCoupon.type === "fixed") {
-        total = Math.max(0, total - appliedCoupon.value) // Ensure total doesn't go below 0
+        total = Math.max(0, total - appliedCoupon.value); // Ensure total doesn't go below 0
       }
     }
-    return total
-  }
+    return total;
+  };
 
   const getDiscountAmount = () => {
-    return getTotalPrice() - getFinalPrice()
-  }
+    return getTotalPrice() - getFinalPrice();
+  };
 
   const getCartItemsCount = () => {
-    return cart.reduce((total, item) => total + item.quantity, 0)
-  }
+    return cart.reduce((total, item) => total + item.quantity, 0);
+  };
 
   // Função para decrementar o uso do cupom no banco de dados
   const decrementCouponUsage = async (couponCode: string) => {
     if (!isConnected) {
-      console.warn("Não conectado ao banco de dados, não é possível decrementar o uso do cupom.")
-      return false
+      console.warn(
+        "Não conectado ao banco de dados, não é possível decrementar o uso do cupom.",
+      );
+      return false;
     }
     try {
-      console.log(`Frontend: Chamando decrement_coupon_usage para "${couponCode}"`)
+      console.log(
+        `Frontend: Chamando decrement_coupon_usage para "${couponCode}"`,
+      );
       const { data, error } = await supabase.rpc("decrement_coupon_usage", {
         p_coupon_code: couponCode,
-      })
+      });
 
       if (error) {
-        console.error("Frontend: Erro ao decrementar uso do cupom:", error)
+        console.error("Frontend: Erro ao decrementar uso do cupom:", error);
         toast({
           title: "Erro no Cupom",
           description: `Não foi possível registrar o uso do cupom "${couponCode}".`,
           variant: "destructive",
-        })
-        return false
+        });
+        return false;
       }
 
       if (data === true) {
-        console.log(`Frontend: Uso do cupom "${couponCode}" decrementado com sucesso.`)
+        console.log(
+          `Frontend: Uso do cupom "${couponCode}" decrementado com sucesso.`,
+        );
         // Revalidar as configurações da loja para refletir o novo limite
-        await fetchSettings()
-        return true
+        await fetchSettings();
+        return true;
       } else {
         console.warn(
           `Frontend: Cupom "${couponCode}" não decrementado (limite 0 ou ilimitado, ou código não encontrado).`,
-        )
-        return false
+        );
+        return false;
       }
     } catch (err) {
-      console.error("Frontend: Erro inesperado ao chamar decrement_coupon_usage:", err)
+      console.error(
+        "Frontend: Erro inesperado ao chamar decrement_coupon_usage:",
+        err,
+      );
       toast({
         title: "Erro Inesperado",
         description: "Ocorreu um erro ao tentar registrar o uso do cupom.",
         variant: "destructive",
-      })
-      return false
+      });
+      return false;
     }
-  }
+  };
 
   const handleFinalizeOrder = async (method: "whatsapp" | "pix") => {
     if (!isConnected) {
@@ -221,15 +279,17 @@ export default function Index() {
         title: "Erro de Conexão",
         description: "Não é possível finalizar pedido: banco de dados offline",
         variant: "destructive",
-      })
-      return
+      });
+      return;
     }
 
-    console.log("Iniciando finalização do pedido...")
+    console.log("Iniciando finalização do pedido...");
 
     // VERIFICAÇÃO ADICIONAL PARA CUPOM ANTES DE PROSSEGUIR
     if (appliedCoupon) {
-      console.log(`Cupom aplicado: ${appliedCoupon.code}. Verificando limite de uso...`)
+      console.log(
+        `Cupom aplicado: ${appliedCoupon.code}. Verificando limite de uso...`,
+      );
       // Encontrar o cupom correspondente nas configurações mais recentes
       const currentCouponInSettings = [
         settings?.coupon_code_1 === appliedCoupon.code
@@ -256,35 +316,41 @@ export default function Index() {
               expiration: settings?.coupon_expiration_3,
             }
           : null,
-      ].find((c) => c !== null)
+      ].find((c) => c !== null);
 
       if (currentCouponInSettings) {
-        console.log("Detalhes do cupom nas configurações:", currentCouponInSettings)
+        console.log(
+          "Detalhes do cupom nas configurações:",
+          currentCouponInSettings,
+        );
         // Verificar se o cupom expirou
         if (currentCouponInSettings.expiration) {
-          const expirationDate = new Date(currentCouponInSettings.expiration)
+          const expirationDate = new Date(currentCouponInSettings.expiration);
           if (new Date() > expirationDate) {
             toast({
               title: "Cupom Expirado",
               description: `O cupom "${appliedCoupon.code}" expirou.`,
               variant: "destructive",
-            })
-            setAppliedCoupon(null) // Remover cupom aplicado
-            setCouponInput("") // Limpar input
-            return // Interromper o checkout
+            });
+            setAppliedCoupon(null); // Remover cupom aplicado
+            setCouponInput(""); // Limpar input
+            return; // Interromper o checkout
           }
         }
 
         // Verificar se o limite de uso foi atingido
-        if (currentCouponInSettings.usageLimit !== null && currentCouponInSettings.usageLimit <= 0) {
+        if (
+          currentCouponInSettings.usageLimit !== null &&
+          currentCouponInSettings.usageLimit <= 0
+        ) {
           toast({
             title: "Cupom Esgotado",
             description: `O cupom "${appliedCoupon.code}" já atingiu seu limite de usos.`,
             variant: "destructive",
-          })
-          setAppliedCoupon(null) // Remover cupom aplicado
-          setCouponInput("") // Limpar input
-          return // Interromper o checkout
+          });
+          setAppliedCoupon(null); // Remover cupom aplicado
+          setCouponInput(""); // Limpar input
+          return; // Interromper o checkout
         }
       } else {
         // Se o cupom aplicado não for encontrado nas configurações (foi removido ou código inválido)
@@ -292,31 +358,33 @@ export default function Index() {
           title: "Cupom Inválido",
           description: `O cupom "${appliedCoupon.code}" não é mais válido.`,
           variant: "destructive",
-        })
-        setAppliedCoupon(null) // Remover cupom aplicado
-        setCouponInput("") // Limpar input
-        return // Interromper o checkout
+        });
+        setAppliedCoupon(null); // Remover cupom aplicado
+        setCouponInput(""); // Limpar input
+        return; // Interromper o checkout
       }
 
       // Se o cupom ainda é válido, tentar decrementar o uso
-      const couponDecrementedSuccessfully = await decrementCouponUsage(appliedCoupon.code)
+      const couponDecrementedSuccessfully = await decrementCouponUsage(
+        appliedCoupon.code,
+      );
       if (!couponDecrementedSuccessfully) {
         // Se o decremento falhar (ex: limite já 0 ou cupom não encontrado/válido para decremento), avisar e não prosseguir com o checkout
         toast({
           title: "Cupom Esgotado ou Inválido",
           description: `O cupom "${appliedCoupon.code}" não pode ser usado. Limite de usos atingido ou cupom inválido.`,
           variant: "destructive",
-        })
-        setAppliedCoupon(null) // Remover cupom aplicado
-        setCouponInput("") // Limpar input
-        return // Interromper o checkout
+        });
+        setAppliedCoupon(null); // Remover cupom aplicado
+        setCouponInput(""); // Limpar input
+        return; // Interromper o checkout
       }
     }
 
-    console.log("Prosseguindo com a finalização do pedido...")
+    console.log("Prosseguindo com a finalização do pedido...");
 
     if (method === "whatsapp") {
-      const storeName = settings?.store_name || "Minha Loja"
+      const storeName = settings?.store_name || "Minha Loja";
       const message =
         `🛍️ *Pedido ${storeName}*\n\n` +
         cart
@@ -330,65 +398,90 @@ export default function Index() {
           )
           .join("\n") +
         `\n💰 *Total: R$ ${getTotalPrice().toFixed(2)}*\n` +
-        (appliedCoupon ? `Desconto (${appliedCoupon.code}): -R$ ${getDiscountAmount().toFixed(2)}\n` : "") +
+        (appliedCoupon
+          ? `Desconto (${appliedCoupon.code}): -R$ ${getDiscountAmount().toFixed(2)}\n`
+          : "") +
         `*Total Final: R$ ${getFinalPrice().toFixed(2)}*\n\n` +
-        `Gostaria de finalizar este pedido!`
-      const encodedMessage = encodeURIComponent(message)
-      const whatsappNumber = settings?.whatsapp_number || "5511999999999"
-      window.open(`https://wa.me/${whatsappNumber}?text=${encodedMessage}`, "_blank")
+        `Gostaria de finalizar este pedido!`;
+      const encodedMessage = encodeURIComponent(message);
+      const whatsappNumber = settings?.whatsapp_number || "5511999999999";
+      window.open(
+        `https://wa.me/${whatsappNumber}?text=${encodedMessage}`,
+        "_blank",
+      );
       toast({
         title: "Redirecionando",
         description: "Abrindo WhatsApp para finalizar seu pedido...",
         variant: "default",
-      })
+      });
     } else if (method === "pix") {
-      setIsGeneratingPix(true)
+      setIsGeneratingPix(true);
       try {
-        const finalPrice = getFinalPrice()
-        console.log(`Chamando Edge Function para gerar PIX com valor: ${finalPrice}`)
-        const response = await fetch("https://dkzbhymqatlnwkdhjyzd.supabase.co/functions/v1/generate-pix", {
+        const finalPrice = getFinalPrice();
+        console.log(
+          `Chamando Edge Function para gerar PIX com valor: ${finalPrice}`,
+        );
+        // Build function URL from configured supabase url (fallback to example project)
+        const functionBase = SUPABASE_URL
+          ? SUPABASE_URL.replace(/\/+$/, "")
+          : "https://dkzbhymqatlnwkdhjyzd.supabase.co";
+        const functionUrl = `${functionBase}/functions/v1/generate-pix`;
+
+        const response = await fetch(functionUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            // Provide anon key to the function (required if function is not public)
+            ...(SUPABASE_ANON_KEY
+              ? {
+                  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                  apikey: SUPABASE_ANON_KEY,
+                }
+              : {}),
           },
           body: JSON.stringify({ amount: finalPrice }),
-        })
+        });
 
-        const data = await response.json()
+        const data = await response.json();
 
         if (!response.ok) {
-          console.error("Erro ao gerar PIX da Edge Function:", data)
+          console.error("Erro ao gerar PIX da Edge Function:", data);
           toast({
             title: "Erro ao Gerar PIX",
             description: `Não foi possível gerar o código PIX. ${data.error || "Erro desconhecido"}`,
             variant: "destructive",
-          })
-          return
+          });
+          return;
         }
 
-        if (data && typeof data === "object" && "pix_code" in data && "qr_code_base64" in data) {
-          setDynamicPixCode(data.pix_code)
-          setDynamicQrCodeUrl(data.qr_code_base64)
-          setIsPixModalOpen(true)
+        if (
+          data &&
+          typeof data === "object" &&
+          "pix_code" in data &&
+          "qr_code_base64" in data
+        ) {
+          setDynamicPixCode(data.pix_code);
+          setDynamicQrCodeUrl(data.qr_code_base64);
+          setIsPixModalOpen(true);
         } else {
           toast({
             title: "Erro ao Gerar PIX",
             description: "Resposta inesperada da função de geração PIX.",
             variant: "destructive",
-          })
+          });
         }
       } catch (err) {
-        console.error("Erro inesperado na geração PIX:", err)
+        console.error("Erro inesperado na geração PIX:", err);
         toast({
           title: "Erro Inesperado",
           description: "Ocorreu um erro ao tentar gerar o PIX.",
           variant: "destructive",
-        })
+        });
       } finally {
-        setIsGeneratingPix(false)
+        setIsGeneratingPix(false);
       }
     }
-  }
+  };
 
   // FUNÇÃO PARA APLICAR CUPOM
   const handleApplyCoupon = () => {
@@ -397,26 +490,26 @@ export default function Index() {
         title: "Erro de Conexão",
         description: "Não é possível aplicar cupom: banco de dados offline",
         variant: "destructive",
-      })
-      return
+      });
+      return;
     }
     if (!couponInput.trim()) {
       toast({
         title: "Cupom Vazio",
         description: "Por favor, digite um código de cupom.",
         variant: "destructive",
-      })
-      return
+      });
+      return;
     }
 
-    const inputCode = couponInput.trim().toUpperCase()
+    const inputCode = couponInput.trim().toUpperCase();
     let foundCoupon: {
-      code: string
-      type: "percentage" | "fixed"
-      value: number
-      expiration: string | null
-      usageLimit: number | null // NOVO
-    } | null = null
+      code: string;
+      type: "percentage" | "fixed";
+      value: number;
+      expiration: string | null;
+      usageLimit: number | null; // NOVO
+    } | null = null;
 
     const coupons = [
       {
@@ -440,20 +533,24 @@ export default function Index() {
         expiration: settings?.coupon_expiration_3,
         usageLimit: settings?.coupon_usage_limit_3, // NOVO
       },
-    ]
+    ];
 
     for (const coupon of coupons) {
-      if (coupon.code?.toUpperCase() === inputCode && coupon.type && coupon.value !== null) {
+      if (
+        coupon.code?.toUpperCase() === inputCode &&
+        coupon.type &&
+        coupon.value !== null
+      ) {
         // Check expiration
         if (coupon.expiration) {
-          const expirationDate = new Date(coupon.expiration)
+          const expirationDate = new Date(coupon.expiration);
           if (new Date() > expirationDate) {
             toast({
               title: "Cupom Expirado",
               description: `O cupom "${coupon.code}" expirou em ${expirationDate.toLocaleDateString()} às ${expirationDate.toLocaleTimeString()}.`,
               variant: "destructive",
-            })
-            return
+            });
+            return;
           }
         }
 
@@ -465,8 +562,8 @@ export default function Index() {
             title: "Cupom Esgotado",
             description: `O cupom "${coupon.code}" já atingiu seu limite de usos.`,
             variant: "destructive",
-          })
-          return
+          });
+          return;
         }
 
         foundCoupon = {
@@ -475,13 +572,13 @@ export default function Index() {
           value: coupon.value,
           expiration: coupon.expiration,
           usageLimit: coupon.usageLimit, // NOVO
-        }
-        break
+        };
+        break;
       }
     }
 
     if (foundCoupon) {
-      setAppliedCoupon(foundCoupon)
+      setAppliedCoupon(foundCoupon);
       toast({
         title: "Cupom Aplicado!",
         description: `Desconto de ${
@@ -490,32 +587,33 @@ export default function Index() {
             : `R$ ${foundCoupon.value.toFixed(2)}`
         } aplicado com sucesso.`,
         variant: "default",
-      })
+      });
     } else {
-      setAppliedCoupon(null)
+      setAppliedCoupon(null);
       toast({
         title: "Cupom Inválido",
-        description: "O código do cupom inserido não é válido ou não está ativo.",
+        description:
+          "O código do cupom inserido não é válido ou não está ativo.",
         variant: "destructive",
-      })
+      });
     }
-  }
+  };
 
   const handleRemoveCoupon = () => {
-    setAppliedCoupon(null)
-    setCouponInput("")
+    setAppliedCoupon(null);
+    setCouponInput("");
     toast({
       title: "Cupom Removido",
       description: "O cupom de desconto foi removido.",
       variant: "default",
-    })
-  }
+    });
+  };
   // FIM FUNÇÕES DE CUPOM
 
   // Lógica para determinar se os botões de finalizar devem ser desabilitados
   const isCheckoutDisabled = () => {
-    if (!isConnected) return true // Sempre desabilitar se não houver conexão
-    if (cart.length === 0) return true // Desabilitar se o carrinho estiver vazio
+    if (!isConnected) return true; // Sempre desabilitar se não houver conexão
+    if (cart.length === 0) return true; // Desabilitar se o carrinho estiver vazio
 
     if (appliedCoupon) {
       // Encontrar o cupom correspondente nas configurações mais recentes
@@ -544,28 +642,31 @@ export default function Index() {
               expiration: settings?.coupon_expiration_3,
             }
           : null,
-      ].find((c) => c !== null)
+      ].find((c) => c !== null);
 
       if (!currentCouponInSettings) {
         // Se o cupom aplicado não for encontrado nas configurações (foi removido ou código inválido)
-        return true
+        return true;
       }
 
       // Verificar se o cupom expirou
       if (currentCouponInSettings.expiration) {
-        const expirationDate = new Date(currentCouponInSettings.expiration)
+        const expirationDate = new Date(currentCouponInSettings.expiration);
         if (new Date() > expirationDate) {
-          return true
+          return true;
         }
       }
 
       // Verificar se o limite de uso foi atingido
-      if (currentCouponInSettings.usageLimit !== null && currentCouponInSettings.usageLimit <= 0) {
-        return true
+      if (
+        currentCouponInSettings.usageLimit !== null &&
+        currentCouponInSettings.usageLimit <= 0
+      ) {
+        return true;
       }
     }
-    return false
-  }
+    return false;
+  };
 
   // Aguardar customização carregar para evitar flash de cores padrão
   if (customizationLoading || !customization) {
@@ -576,7 +677,7 @@ export default function Index() {
           <p className="text-gray-600">Carregando...</p>
         </div>
       </div>
-    )
+    );
   }
 
   return (
@@ -587,7 +688,10 @@ export default function Index() {
     >
       <DynamicStyles customization={customization} />
       {/* Header */}
-      <header className="shadow-sm sticky top-0 z-40" style={{ backgroundColor: customization.header_color }}>
+      <header
+        className="shadow-sm sticky top-0 z-40"
+        style={{ backgroundColor: customization.header_color }}
+      >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             {/* Logo */}
@@ -610,7 +714,9 @@ export default function Index() {
                     </div>
                   ))}
                 {customization.show_store_name && (
-                  <span className="text-xl font-bold text-gray-900">{settings?.store_name || "Minha Loja"}</span>
+                  <span className="text-xl font-bold text-gray-900">
+                    {settings?.store_name || "Minha Loja"}
+                  </span>
                 )}
               </div>
             </div>
@@ -628,7 +734,12 @@ export default function Index() {
             </div>
             {/* Actions */}
             <div className="flex items-center space-x-4">
-              <Button variant="ghost" size="icon" className="relative" onClick={() => setIsCartOpen(true)}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="relative"
+                onClick={() => setIsCartOpen(true)}
+              >
                 <ShoppingCart className="w-5 h-5" />
                 {getCartItemsCount() > 0 && (
                   <Badge className="absolute -top-2 -right-2 w-5 h-5 rounded-full p-0 flex items-center justify-center text-xs">
@@ -641,7 +752,10 @@ export default function Index() {
         </div>
       </header>
       {/* Category Filter */}
-      <div className="border-b menu-filter" style={{ backgroundColor: customization.menu_color }}>
+      <div
+        className="border-b menu-filter"
+        style={{ backgroundColor: customization.menu_color }}
+      >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex space-x-8 overflow-x-auto py-4">
             {categories.map((category) => (
@@ -663,8 +777,12 @@ export default function Index() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Nossos Produtos</h1>
-          <p className="text-gray-600">Descubra as últimas tendências da moda e perfumes exclusivos</p>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
+            Nossos Produtos
+          </h1>
+          <p className="text-gray-600">
+            Descubra as últimas tendências da moda e perfumes exclusivos
+          </p>
           {/* Connection Status */}
           {!isConnected && (
             <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
@@ -679,7 +797,9 @@ export default function Index() {
           <div className="text-center py-8">
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
               <p className="text-red-600">Erro: {error}</p>
-              <p className="text-sm text-red-500 mt-2">Verifique as configurações do banco de dados</p>
+              <p className="text-sm text-red-500 mt-2">
+                Verifique as configurações do banco de dados
+              </p>
             </div>
           </div>
         )}
@@ -694,7 +814,9 @@ export default function Index() {
         {!loading && !error && filteredProducts.length === 0 && isConnected && (
           <div className="text-center py-12">
             <p className="text-gray-600">Nenhum produto encontrado.</p>
-            <p className="text-sm text-gray-500 mt-2">Adicione produtos no painel administrativo</p>
+            <p className="text-sm text-gray-500 mt-2">
+              Adicione produtos no painel administrativo
+            </p>
           </div>
         )}
         {/* Products Grid */}
@@ -712,21 +834,22 @@ export default function Index() {
                 <div
                   className="aspect-[3/4] overflow-hidden relative group"
                   onTouchStart={(e) => {
-                    const touchStartX = e.changedTouches[0].clientX
+                    const touchStartX = e.changedTouches[0].clientX;
                     const handleTouchEnd = (endEvent: TouchEvent) => {
-                      const touchEndX = endEvent.changedTouches[0].clientX
-                      const diff = touchStartX - touchEndX
-                      const currentImage = activeImages[product.id] ?? 0
+                      const touchEndX = endEvent.changedTouches[0].clientX;
+                      const diff = touchStartX - touchEndX;
+                      const currentImage = activeImages[product.id] ?? 0;
                       if (Math.abs(diff) > 30 && product.image_2) {
-                        const nextImage = (currentImage + (diff > 0 ? 1 : -1) + 2) % 2
+                        const nextImage =
+                          (currentImage + (diff > 0 ? 1 : -1) + 2) % 2;
                         setActiveImages((prev) => ({
                           ...prev,
                           [product.id]: nextImage,
-                        }))
+                        }));
                       }
-                      document.removeEventListener("touchend", handleTouchEnd)
-                    }
-                    document.addEventListener("touchend", handleTouchEnd)
+                      document.removeEventListener("touchend", handleTouchEnd);
+                    };
+                    document.addEventListener("touchend", handleTouchEnd);
                   }}
                 >
                   {/* Imagem principal com fade */}
@@ -734,7 +857,9 @@ export default function Index() {
                     src={product.image || "/placeholder.svg"}
                     alt={product.name}
                     className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-in-out ${
-                      (activeImages[product.id] ?? 0) === 0 ? "opacity-100 z-10" : "opacity-0 z-0"
+                      (activeImages[product.id] ?? 0) === 0
+                        ? "opacity-100 z-10"
+                        : "opacity-0 z-0"
                     }`}
                   />
                   {/* Segunda imagem com fade */}
@@ -743,7 +868,9 @@ export default function Index() {
                       src={product.image_2 || "/placeholder.svg"}
                       alt={product.name + " alternativa"}
                       className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-in-out ${
-                        activeImages[product.id] === 1 ? "opacity-100 z-10" : "opacity-0 z-0"
+                        activeImages[product.id] === 1
+                          ? "opacity-100 z-10"
+                          : "opacity-0 z-0"
                       }`}
                     />
                   )}
@@ -753,12 +880,12 @@ export default function Index() {
                       {/* Botão voltar (<) */}
                       <button
                         onClick={(e) => {
-                          e.stopPropagation()
+                          e.stopPropagation();
                           setActiveImages((prev) => {
-                            const current = prev[product.id] ?? 0
-                            const next = (current - 1 + 2) % 2
-                            return { ...prev, [product.id]: next }
-                          })
+                            const current = prev[product.id] ?? 0;
+                            const next = (current - 1 + 2) % 2;
+                            return { ...prev, [product.id]: next };
+                          });
                         }}
                         className="absolute left-2 top-1/2 transform -translate-y-1/2 text-white text-3xl font-bold z-20 hover:scale-110 transition-transform"
                       >
@@ -767,12 +894,12 @@ export default function Index() {
                       {/* Botão avançar (>) */}
                       <button
                         onClick={(e) => {
-                          e.stopPropagation()
+                          e.stopPropagation();
                           setActiveImages((prev) => {
-                            const current = prev[product.id] ?? 0
-                            const next = (current + 1) % 2
-                            return { ...prev, [product.id]: next }
-                          })
+                            const current = prev[product.id] ?? 0;
+                            const next = (current + 1) % 2;
+                            return { ...prev, [product.id]: next };
+                          });
                         }}
                         className="absolute right-2 top-1/2 transform -translate-y-1/2 text-white text-3xl font-bold z-20 hover:scale-110 transition-transform"
                       >
@@ -783,12 +910,18 @@ export default function Index() {
                 </div>
                 <div className="p-3 sm:p-4 flex flex-col flex-grow">
                   <div className="flex-grow">
-                    <h3 className="font-medium text-gray-900 mb-1 text-sm sm:text-base">{product.name}</h3>
-                    <p className="text-primary font-bold mb-2 text-base sm:text-lg">R$ {product.price.toFixed(2)}</p>
+                    <h3 className="font-medium text-gray-900 mb-1 text-sm sm:text-base">
+                      {product.name}
+                    </h3>
+                    <p className="text-primary font-bold mb-2 text-base sm:text-lg">
+                      R$ {product.price.toFixed(2)}
+                    </p>
                     {/* Seleção de Tamanhos - Agora sempre renderiza um div com min-height */}
                     {product.sizes && product.sizes.length > 0 ? (
                       <div className="mb-3 min-h-[70px]">
-                        <p className="text-xs text-gray-500 mb-2">Escolha o tamanho:</p>
+                        <p className="text-xs text-gray-500 mb-2">
+                          Escolha o tamanho:
+                        </p>
                         <div className="flex flex-wrap gap-1">
                           {product.sizes.map((size, index) => (
                             <button
@@ -796,7 +929,8 @@ export default function Index() {
                               onClick={() =>
                                 setSelectedSizes((prev) => ({
                                   ...prev,
-                                  [product.id]: prev[product.id] === size ? "" : size,
+                                  [product.id]:
+                                    prev[product.id] === size ? "" : size,
                                 }))
                               }
                               className={`text-xs px-2 py-1 border rounded transition-colors ${
@@ -810,12 +944,16 @@ export default function Index() {
                           ))}
                         </div>
                         {selectedSizes[product.id] && (
-                          <p className="text-xs text-primary mt-1">Tamanho selecionado: {selectedSizes[product.id]}</p>
+                          <p className="text-xs text-primary mt-1">
+                            Tamanho selecionado: {selectedSizes[product.id]}
+                          </p>
                         )}
                       </div>
                     ) : (
                       // Placeholder para manter a altura consistente quando não há tamanhos
-                      <div className="mb-3 min-h-[70px]">{/* Conteúdo vazio para manter o espaçamento */}</div>
+                      <div className="mb-3 min-h-[70px]">
+                        {/* Conteúdo vazio para manter o espaçamento */}
+                      </div>
                     )}
                   </div>
                   <Button
@@ -829,12 +967,16 @@ export default function Index() {
                       border: `1px solid ${customization.button_color}`,
                     }}
                     onMouseEnter={(e) => {
-                      if (!isConnected) return
-                      e.currentTarget.style.backgroundColor = darkenColor(customization.button_color, 10)
+                      if (!isConnected) return;
+                      e.currentTarget.style.backgroundColor = darkenColor(
+                        customization.button_color,
+                        10,
+                      );
                     }}
                     onMouseLeave={(e) => {
-                      if (!isConnected) return
-                      e.currentTarget.style.backgroundColor = customization.button_color
+                      if (!isConnected) return;
+                      e.currentTarget.style.backgroundColor =
+                        customization.button_color;
                     }}
                   >
                     {isConnected ? "Adicionar ao Carrinho" : "Offline"}
@@ -846,26 +988,38 @@ export default function Index() {
         )}
       </main>
       {/* Footer */}
-      <footer className="border-t mt-16" style={{ backgroundColor: customization.footer_color }}>
+      <footer
+        className="border-t mt-16"
+        style={{ backgroundColor: customization.footer_color }}
+      >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2"></div>
-            <Link to="/admin" className="text-xs text-gray-500 hover:text-primary">
+            <Link
+              to="/admin"
+              className="text-xs text-gray-500 hover:text-primary"
+            >
               Admin
             </Link>
           </div>
           <div className="mt-4 text-center">
             <p className="text-gray-600 text-sm">
-              {settings?.footer_text || "© 2024 Minha Loja. Todos os direitos reservados."}
+              {settings?.footer_text ||
+                "© 2024 Minha Loja. Todos os direitos reservados."}
             </p>
-            <p className="text-gray-500 text-xs mt-2">{settings?.footer_company_name || "Minha Loja"}</p>
+            <p className="text-gray-500 text-xs mt-2">
+              {settings?.footer_company_name || "Minha Loja"}
+            </p>
           </div>
         </div>
       </footer>
       {/* Cart Sidebar */}
       {isCartOpen && (
         <div className="fixed inset-0 z-50 overflow-hidden">
-          <div className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setIsCartOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black bg-opacity-50"
+            onClick={() => setIsCartOpen(false)}
+          />
           <div
             className="absolute right-0 top-0 h-full w-full max-w-md shadow-xl cart-panel"
             style={{ backgroundColor: customization.cart_color }}
@@ -874,7 +1028,11 @@ export default function Index() {
               {/* Cart Header */}
               <div className="flex items-center justify-between p-4 border-b">
                 <h2 className="text-lg font-semibold">Carrinho de Compras</h2>
-                <Button variant="ghost" size="icon" onClick={() => setIsCartOpen(false)}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setIsCartOpen(false)}
+                >
                   <X className="w-5 h-5" />
                 </Button>
               </div>
@@ -888,31 +1046,48 @@ export default function Index() {
                 ) : (
                   <div className="space-y-4">
                     {cart.map((item) => (
-                      <div key={item.id} className="flex items-center space-x-3 bg-gray-50 p-3 rounded-lg">
+                      <div
+                        key={item.id}
+                        className="flex items-center space-x-3 bg-gray-50 p-3 rounded-lg"
+                      >
                         <img
                           src={item.image || "/placeholder.svg"}
                           alt={item.name}
                           className="w-16 h-16 object-cover rounded"
                         />
                         <div className="flex-1 min-w-0">
-                          <h4 className="font-medium text-sm truncate">{item.name}</h4>
-                          {item.selectedSize && <p className="text-xs text-gray-500">Tamanho: {item.selectedSize}</p>}
-                          <p className="text-primary font-semibold">R$ {item.price.toFixed(2)}</p>
+                          <h4 className="font-medium text-sm truncate">
+                            {item.name}
+                          </h4>
+                          {item.selectedSize && (
+                            <p className="text-xs text-gray-500">
+                              Tamanho: {item.selectedSize}
+                            </p>
+                          )}
+                          <p className="text-primary font-semibold">
+                            R$ {item.price.toFixed(2)}
+                          </p>
                           <div className="flex items-center space-x-2 mt-2">
                             <Button
                               size="icon"
                               variant="outline"
                               className="w-8 h-8 bg-transparent"
-                              onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                              onClick={() =>
+                                updateQuantity(item.id, item.quantity - 1)
+                              }
                             >
                               <Minus className="w-3 h-3" />
                             </Button>
-                            <span className="text-sm font-medium w-8 text-center">{item.quantity}</span>
+                            <span className="text-sm font-medium w-8 text-center">
+                              {item.quantity}
+                            </span>
                             <Button
                               size="icon"
                               variant="outline"
                               className="w-8 h-8 bg-transparent"
-                              onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                              onClick={() =>
+                                updateQuantity(item.id, item.quantity + 1)
+                              }
                             >
                               <Plus className="w-3 h-3" />
                             </Button>
@@ -946,7 +1121,11 @@ export default function Index() {
                             : `R$ ${appliedCoupon.value.toFixed(2)} OFF`}
                           )
                         </span>
-                        <Button variant="ghost" size="icon" onClick={handleRemoveCoupon}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={handleRemoveCoupon}
+                        >
                           <X className="w-4 h-4 text-green-800" />
                         </Button>
                       </div>
@@ -959,7 +1138,10 @@ export default function Index() {
                           className="flex-1"
                           disabled={!isConnected}
                         />
-                        <Button onClick={handleApplyCoupon} disabled={!isConnected}>
+                        <Button
+                          onClick={handleApplyCoupon}
+                          disabled={!isConnected}
+                        >
                           Aplicar
                         </Button>
                       </div>
@@ -989,15 +1171,21 @@ export default function Index() {
                       border: `1px solid ${customization.button_color}`,
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = darkenColor(customization.button_color, 10)
+                      e.currentTarget.style.backgroundColor = darkenColor(
+                        customization.button_color,
+                        10,
+                      );
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = customization.button_color
+                      e.currentTarget.style.backgroundColor =
+                        customization.button_color;
                     }}
                     onClick={() => handleFinalizeOrder("whatsapp")}
                     disabled={isCheckoutDisabled()} // Adicionado disabled
                   >
-                    {isCheckoutDisabled() ? "Finalizar (Cupom Esgotado/Offline)" : "Finalizar no WhatsApp"}
+                    {isCheckoutDisabled()
+                      ? "Finalizar (Cupom Esgotado/Offline)"
+                      : "Finalizar no WhatsApp"}
                   </Button>
                   {/* Botão PIX agora usa o estado de loading */}
                   <Button
@@ -1008,7 +1196,8 @@ export default function Index() {
                   >
                     {isGeneratingPix ? (
                       <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Gerando PIX...
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />{" "}
+                        Gerando PIX...
                       </>
                     ) : (
                       <>
@@ -1033,5 +1222,5 @@ export default function Index() {
         />
       )}
     </div>
-  )
+  );
 }
