@@ -67,10 +67,7 @@ export function useAdminAuth() {
         })
 
         if (error) {
-          debugSupabaseError(error, "validate_admin_login")
-          console.error("❌ Erro na validação:", formatError(error))
-
-          // Detect common RPC-missing or signature errors and use fallback
+          // Detect common RPC-missing or signature errors and use fallback without noisy debug logs
           const errorMsg = formatError(error)
           const errCode = (error as any)?.code
           const isMissingFn = errCode === "PGRST202" || /could not find the function/i.test(errorMsg) || /does not exist/i.test(errorMsg) || /validate_admin_login/i.test(errorMsg)
@@ -80,6 +77,9 @@ export function useAdminAuth() {
             return await loginFallback(credentials)
           }
 
+          // For other errors keep full debug logs
+          debugSupabaseError(error, "validate_admin_login")
+          console.error("❌ Erro na validação:", errorMsg)
           throw new Error(errorMsg)
         }
 
