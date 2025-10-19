@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { ShoppingCart, Search, X, Plus, Minus, Trash2, Loader2 } from "lucide-react"
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, Loader2, QrCode } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -11,8 +11,10 @@ import { useStoreSettings } from "@/hooks/useStoreSettings"
 import { useStoreCustomization } from "@/hooks/useStoreCustomization"
 import { useCategories } from "@/hooks/useCategories"
 import DynamicStyles from "@/components/DynamicStyles"
+import { supabase } from "@/lib/supabase" // Importar supabase client
 import type { Product } from "@/lib/supabase"
 import { useToast } from "@/hooks/use-toast"
+import PixModal from "@/components/PixModal"
 
 interface CartItem extends Product {
   quantity: number
@@ -45,9 +47,22 @@ export default function Index() {
   const [selectedCategory, setSelectedCategory] = useState("Todos")
   const [selectedSizes, setSelectedSizes] = useState<{ [key: number]: string }>({})
   const [activeImages, setActiveImages] = useState<{ [key: number]: number }>({})
-  // Grid fixo: 2 colunas mobile, 4 desktop
+  const [isPixModalOpen, setIsPixModalOpen] = useState(false)
+  const [dynamicPixCode, setDynamicPixCode] = useState<string | null>(null) // Novo estado para o código PIX dinâmico
+  const [dynamicQrCodeUrl, setDynamicQrCodeUrl] = useState<string | null>(null) // Novo estado para a URL do QR Code dinâmico
+  const [isGeneratingPix, setIsGeneratingPix] = useState(false) // Novo estado para loading do PIX
+  // NOVOS ESTADOS PARA CUPOM
+  const [couponInput, setCouponInput] = useState("")
+  const [appliedCoupon, setAppliedCoupon] = useState<{
+    code: string
+    type: "percentage" | "fixed"
+    value: number
+    usageLimit: number | null // NOVO: Limite de uso
+  } | null>(null)
+  // FIM NOVOS ESTADOS PARA CUPOM
+
   const { products, loading, error, isConnected } = useProducts()
-  const { settings } = useStoreSettings()
+  const { settings, fetchSettings } = useStoreSettings() // Importar fetchSettings para revalidar
   const { customization, loading: customizationLoading } = useStoreCustomization()
   const { activeCategories } = useCategories()
   const { toast } = useToast()
@@ -136,29 +151,420 @@ export default function Index() {
     return cart.reduce((total, item) => total + item.price * item.quantity, 0)
   }
 
+  const getFinalPrice = () => {
+    let total = getTotalPrice()
+    if (appliedCoupon) {
+      if (appliedCoupon.type === "percentage") {
+        total = total * (1 - appliedCoupon.value)
+      } else if (appliedCoupon.type === "fixed") {
+        total = Math.max(0, total - appliedCoupon.value) // Ensure total doesn't go below 0
+      }
+    }
+    return total
+  }
+
+  const getDiscountAmount = () => {
+    return getTotalPrice() - getFinalPrice()
+  }
+
   const getCartItemsCount = () => {
     return cart.reduce((total, item) => total + item.quantity, 0)
   }
 
-  const generateWhatsAppMessage = () => {
-    const storeName = settings?.store_name || "Minha Loja"
-    const message =
-      `🛍️ *Pedido ${storeName}*\n\n` +
-      cart
-        .map(
-          (item) =>
-            `• ${item.name}\n` +
-            (item.selectedSize ? `  Tamanho: ${item.selectedSize}\n` : "") +
-            `  Quantidade: ${item.quantity}\n` +
-            `  Preço unitário: R$ ${item.price.toFixed(2)}\n` +
-            `  Subtotal: R$ ${(item.price * item.quantity).toFixed(2)}\n`,
+  // Função para decrementar o uso do cupom no banco de dados
+  const decrementCouponUsage = async (couponCode: string) => {
+    if (!isConnected) {
+      console.warn("Não conectado ao banco de dados, não é possível decrementar o uso do cupom.")
+      return false
+    }
+    try {
+      console.log(`Frontend: Chamando decrement_coupon_usage para "${couponCode}"`)
+      const { data, error } = await supabase.rpc("decrement_coupon_usage", {
+        p_coupon_code: couponCode,
+      })
+
+      if (error) {
+        console.error("Frontend: Erro ao decrementar uso do cupom:", error)
+        toast({
+          title: "Erro no Cupom",
+          description: `Não foi possível registrar o uso do cupom "${couponCode}".`,
+          variant: "destructive",
+        })
+        return false
+      }
+
+      if (data === true) {
+        console.log(`Frontend: Uso do cupom "${couponCode}" decrementado com sucesso.`)
+        // Revalidar as configurações da loja para refletir o novo limite
+        await fetchSettings()
+        return true
+      } else {
+        console.warn(
+          `Frontend: Cupom "${couponCode}" não decrementado (limite 0 ou ilimitado, ou código não encontrado).`,
         )
-        .join("\n") +
-      `\n💰 *Total: R$ ${getTotalPrice().toFixed(2)}*\n\n` +
-      `Gostaria de finalizar este pedido!`
-    const encodedMessage = encodeURIComponent(message)
-    const whatsappNumber = settings?.whatsapp_number || "5511999999999"
-    return `https://wa.me/${whatsappNumber}?text=${encodedMessage}`
+        return false
+      }
+    } catch (err) {
+      console.error("Frontend: Erro inesperado ao chamar decrement_coupon_usage:", err)
+      toast({
+        title: "Erro Inesperado",
+        description: "Ocorreu um erro ao tentar registrar o uso do cupom.",
+        variant: "destructive",
+      })
+      return false
+    }
+  }
+
+  const handleFinalizeOrder = async (method: "whatsapp" | "pix") => {
+    if (!isConnected) {
+      toast({
+        title: "Erro de Conexão",
+        description: "Não é possível finalizar pedido: banco de dados offline",
+        variant: "destructive",
+      })
+      return
+    }
+
+    console.log("Iniciando finalização do pedido...")
+
+    // VERIFICAÇÃO ADICIONAL PARA CUPOM ANTES DE PROSSEGUIR
+    if (appliedCoupon) {
+      console.log(`Cupom aplicado: ${appliedCoupon.code}. Verificando limite de uso...`)
+      // Encontrar o cupom correspondente nas configurações mais recentes
+      const currentCouponInSettings = [
+        settings?.coupon_code_1 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_1,
+              value: settings?.coupon_value_1,
+              usageLimit: settings?.coupon_usage_limit_1,
+              expiration: settings?.coupon_expiration_1,
+            }
+          : null,
+        settings?.coupon_code_2 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_2,
+              value: settings?.coupon_value_2,
+              usageLimit: settings?.coupon_usage_limit_2,
+              expiration: settings?.coupon_expiration_2,
+            }
+          : null,
+        settings?.coupon_code_3 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_3,
+              value: settings?.coupon_value_3,
+              usageLimit: settings?.coupon_usage_limit_3,
+              expiration: settings?.coupon_expiration_3,
+            }
+          : null,
+      ].find((c) => c !== null)
+
+      if (currentCouponInSettings) {
+        console.log("Detalhes do cupom nas configurações:", currentCouponInSettings)
+        // Verificar se o cupom expirou
+        if (currentCouponInSettings.expiration) {
+          const expirationDate = new Date(currentCouponInSettings.expiration)
+          if (new Date() > expirationDate) {
+            toast({
+              title: "Cupom Expirado",
+              description: `O cupom "${appliedCoupon.code}" expirou.`,
+              variant: "destructive",
+            })
+            setAppliedCoupon(null) // Remover cupom aplicado
+            setCouponInput("") // Limpar input
+            return // Interromper o checkout
+          }
+        }
+
+        // Verificar se o limite de uso foi atingido
+        if (currentCouponInSettings.usageLimit !== null && currentCouponInSettings.usageLimit <= 0) {
+          toast({
+            title: "Cupom Esgotado",
+            description: `O cupom "${appliedCoupon.code}" já atingiu seu limite de usos.`,
+            variant: "destructive",
+          })
+          setAppliedCoupon(null) // Remover cupom aplicado
+          setCouponInput("") // Limpar input
+          return // Interromper o checkout
+        }
+      } else {
+        // Se o cupom aplicado não for encontrado nas configurações (foi removido ou código inválido)
+        toast({
+          title: "Cupom Inválido",
+          description: `O cupom "${appliedCoupon.code}" não é mais válido.`,
+          variant: "destructive",
+        })
+        setAppliedCoupon(null) // Remover cupom aplicado
+        setCouponInput("") // Limpar input
+        return // Interromper o checkout
+      }
+
+      // Se o cupom ainda é válido, tentar decrementar o uso
+      const couponDecrementedSuccessfully = await decrementCouponUsage(appliedCoupon.code)
+      if (!couponDecrementedSuccessfully) {
+        // Se o decremento falhar (ex: limite já 0 ou cupom não encontrado/válido para decremento), avisar e não prosseguir com o checkout
+        toast({
+          title: "Cupom Esgotado ou Inválido",
+          description: `O cupom "${appliedCoupon.code}" não pode ser usado. Limite de usos atingido ou cupom inválido.`,
+          variant: "destructive",
+        })
+        setAppliedCoupon(null) // Remover cupom aplicado
+        setCouponInput("") // Limpar input
+        return // Interromper o checkout
+      }
+    }
+
+    console.log("Prosseguindo com a finalização do pedido...")
+
+    if (method === "whatsapp") {
+      const storeName = settings?.store_name || "Minha Loja"
+      const message =
+        `🛍️ *Pedido ${storeName}*\n\n` +
+        cart
+          .map(
+            (item) =>
+              `• ${item.name}\n` +
+              (item.selectedSize ? `  Tamanho: ${item.selectedSize}\n` : "") +
+              `  Quantidade: ${item.quantity}\n` +
+              `  Preço unitário: R$ ${item.price.toFixed(2)}\n` +
+              `  Subtotal: R$ ${(item.price * item.quantity).toFixed(2)}\n`,
+          )
+          .join("\n") +
+        `\n💰 *Total: R$ ${getTotalPrice().toFixed(2)}*\n` +
+        (appliedCoupon ? `Desconto (${appliedCoupon.code}): -R$ ${getDiscountAmount().toFixed(2)}\n` : "") +
+        `*Total Final: R$ ${getFinalPrice().toFixed(2)}*\n\n` +
+        `Gostaria de finalizar este pedido!`
+      const encodedMessage = encodeURIComponent(message)
+      const whatsappNumber = settings?.whatsapp_number || "5511999999999"
+      window.open(`https://wa.me/${whatsappNumber}?text=${encodedMessage}`, "_blank")
+      toast({
+        title: "Redirecionando",
+        description: "Abrindo WhatsApp para finalizar seu pedido...",
+        variant: "default",
+      })
+    } else if (method === "pix") {
+      setIsGeneratingPix(true)
+      try {
+        const finalPrice = getFinalPrice()
+        console.log(`Chamando Edge Function para gerar PIX com valor: ${finalPrice}`)
+        const response = await fetch("https://<YOUR_SUPABASE_PROJECT_REF>.supabase.co/functions/v1/generate-pix", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ amount: finalPrice }),
+        })
+
+        const data = await response.json()
+
+        if (!response.ok) {
+          console.error("Erro ao gerar PIX da Edge Function:", data)
+          toast({
+            title: "Erro ao Gerar PIX",
+            description: `Não foi possível gerar o código PIX. ${data.error || "Erro desconhecido"}`,
+            variant: "destructive",
+          })
+          return
+        }
+
+        if (data && typeof data === "object" && "pix_code" in data && "qr_code_base64" in data) {
+          setDynamicPixCode(data.pix_code)
+          setDynamicQrCodeUrl(data.qr_code_base64)
+          setIsPixModalOpen(true)
+        } else {
+          toast({
+            title: "Erro ao Gerar PIX",
+            description: "Resposta inesperada da função de geração PIX.",
+            variant: "destructive",
+          })
+        }
+      } catch (err) {
+        console.error("Erro inesperado na geração PIX:", err)
+        toast({
+          title: "Erro Inesperado",
+          description: "Ocorreu um erro ao tentar gerar o PIX.",
+          variant: "destructive",
+        })
+      } finally {
+        setIsGeneratingPix(false)
+      }
+    }
+  }
+
+  // FUNÇÃO PARA APLICAR CUPOM
+  const handleApplyCoupon = () => {
+    if (!isConnected) {
+      toast({
+        title: "Erro de Conexão",
+        description: "Não é possível aplicar cupom: banco de dados offline",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!couponInput.trim()) {
+      toast({
+        title: "Cupom Vazio",
+        description: "Por favor, digite um código de cupom.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const inputCode = couponInput.trim().toUpperCase()
+    let foundCoupon: {
+      code: string
+      type: "percentage" | "fixed"
+      value: number
+      expiration: string | null
+      usageLimit: number | null // NOVO
+    } | null = null
+
+    const coupons = [
+      {
+        code: settings?.coupon_code_1,
+        type: settings?.coupon_type_1,
+        value: settings?.coupon_value_1,
+        expiration: settings?.coupon_expiration_1,
+        usageLimit: settings?.coupon_usage_limit_1, // NOVO
+      },
+      {
+        code: settings?.coupon_code_2,
+        type: settings?.coupon_type_2,
+        value: settings?.coupon_value_2,
+        expiration: settings?.coupon_expiration_2,
+        usageLimit: settings?.coupon_usage_limit_2, // NOVO
+      },
+      {
+        code: settings?.coupon_code_3,
+        type: settings?.coupon_type_3,
+        value: settings?.coupon_value_3,
+        expiration: settings?.coupon_expiration_3,
+        usageLimit: settings?.coupon_usage_limit_3, // NOVO
+      },
+    ]
+
+    for (const coupon of coupons) {
+      if (coupon.code?.toUpperCase() === inputCode && coupon.type && coupon.value !== null) {
+        // Check expiration
+        if (coupon.expiration) {
+          const expirationDate = new Date(coupon.expiration)
+          if (new Date() > expirationDate) {
+            toast({
+              title: "Cupom Expirado",
+              description: `O cupom "${coupon.code}" expirou em ${expirationDate.toLocaleDateString()} às ${expirationDate.toLocaleTimeString()}.`,
+              variant: "destructive",
+            })
+            return
+          }
+        }
+
+        // Check usage limit (client-side only)
+        // IMPORTANT: For a robust global usage limit, this check should be done server-side
+        // and the usage count should be decremented in a transaction.
+        if (coupon.usageLimit !== null && coupon.usageLimit <= 0) {
+          toast({
+            title: "Cupom Esgotado",
+            description: `O cupom "${coupon.code}" já atingiu seu limite de usos.`,
+            variant: "destructive",
+          })
+          return
+        }
+
+        foundCoupon = {
+          code: coupon.code,
+          type: coupon.type,
+          value: coupon.value,
+          expiration: coupon.expiration,
+          usageLimit: coupon.usageLimit, // NOVO
+        }
+        break
+      }
+    }
+
+    if (foundCoupon) {
+      setAppliedCoupon(foundCoupon)
+      toast({
+        title: "Cupom Aplicado!",
+        description: `Desconto de ${
+          foundCoupon.type === "percentage"
+            ? `${(foundCoupon.value * 100).toFixed(0)}%`
+            : `R$ ${foundCoupon.value.toFixed(2)}`
+        } aplicado com sucesso.`,
+        variant: "default",
+      })
+    } else {
+      setAppliedCoupon(null)
+      toast({
+        title: "Cupom Inválido",
+        description: "O código do cupom inserido não é válido ou não está ativo.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null)
+    setCouponInput("")
+    toast({
+      title: "Cupom Removido",
+      description: "O cupom de desconto foi removido.",
+      variant: "default",
+    })
+  }
+  // FIM FUNÇÕES DE CUPOM
+
+  // Lógica para determinar se os botões de finalizar devem ser desabilitados
+  const isCheckoutDisabled = () => {
+    if (!isConnected) return true // Sempre desabilitar se não houver conexão
+    if (cart.length === 0) return true // Desabilitar se o carrinho estiver vazio
+
+    if (appliedCoupon) {
+      // Encontrar o cupom correspondente nas configurações mais recentes
+      const currentCouponInSettings = [
+        settings?.coupon_code_1 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_1,
+              value: settings?.coupon_value_1,
+              usageLimit: settings?.coupon_usage_limit_1,
+              expiration: settings?.coupon_expiration_1,
+            }
+          : null,
+        settings?.coupon_code_2 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_2,
+              value: settings?.coupon_value_2,
+              usageLimit: settings?.coupon_usage_limit_2,
+              expiration: settings?.coupon_expiration_2,
+            }
+          : null,
+        settings?.coupon_code_3 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_3,
+              value: settings?.coupon_value_3,
+              usageLimit: settings?.coupon_usage_limit_3,
+              expiration: settings?.coupon_expiration_3,
+            }
+          : null,
+      ].find((c) => c !== null)
+
+      if (!currentCouponInSettings) {
+        // Se o cupom aplicado não for encontrado nas configurações (foi removido ou código inválido)
+        return true
+      }
+
+      // Verificar se o cupom expirou
+      if (currentCouponInSettings.expiration) {
+        const expirationDate = new Date(currentCouponInSettings.expiration)
+        if (new Date() > expirationDate) {
+          return true
+        }
+      }
+
+      // Verificar se o limite de uso foi atingido
+      if (currentCouponInSettings.usageLimit !== null && currentCouponInSettings.usageLimit <= 0) {
+        return true
+      }
+    }
+    return false
   }
 
   // Aguardar customização carregar para evitar flash de cores padrão
@@ -297,7 +703,7 @@ export default function Index() {
             {filteredProducts.map((product) => (
               <div
                 key={product.id}
-                className="rounded-lg shadow-sm hover:shadow-md transition-shadow overflow-hidden group flex flex-col" // ADICIONADO: flex flex-col
+                className="rounded-lg shadow-sm hover:shadow-md transition-shadow overflow-hidden group flex flex-col"
                 style={{
                   backgroundColor: customization.card_background_color,
                   borderColor: customization.card_border_color,
@@ -376,18 +782,12 @@ export default function Index() {
                   )}
                 </div>
                 <div className="p-3 sm:p-4 flex flex-col flex-grow">
-                  {" "}
-                  {/* ADICIONADO: flex-grow, REMOVIDO: h-full */}
                   <div className="flex-grow">
-                    {" "}
-                    {/* Mantido: flex-grow */}
                     <h3 className="font-medium text-gray-900 mb-1 text-sm sm:text-base">{product.name}</h3>
                     <p className="text-primary font-bold mb-2 text-base sm:text-lg">R$ {product.price.toFixed(2)}</p>
                     {/* Seleção de Tamanhos - Agora sempre renderiza um div com min-height */}
                     {product.sizes && product.sizes.length > 0 ? (
                       <div className="mb-3 min-h-[70px]">
-                        {" "}
-                        {/* Mantido: min-h-[70px] */}
                         <p className="text-xs text-gray-500 mb-2">Escolha o tamanho:</p>
                         <div className="flex flex-wrap gap-1">
                           {product.sizes.map((size, index) => (
@@ -415,11 +815,7 @@ export default function Index() {
                       </div>
                     ) : (
                       // Placeholder para manter a altura consistente quando não há tamanhos
-                      <div className="mb-3 min-h-[70px]">
-                        {" "}
-                        {/* Mantido: min-h-[70px] */}
-                        {/* Conteúdo vazio para manter o espaçamento */}
-                      </div>
+                      <div className="mb-3 min-h-[70px]">{/* Conteúdo vazio para manter o espaçamento */}</div>
                     )}
                   </div>
                   <Button
@@ -538,9 +934,52 @@ export default function Index() {
               {/* Cart Footer */}
               {cart.length > 0 && (
                 <div className="border-t p-4 space-y-4">
+                  {/* Seção de Cupom */}
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-semibold">Cupom de Desconto</h3>
+                    {appliedCoupon ? (
+                      <div className="flex items-center justify-between bg-green-50 border border-green-200 p-2 rounded-md">
+                        <span className="text-sm text-green-800">
+                          Cupom "{appliedCoupon.code}" aplicado (
+                          {appliedCoupon.type === "percentage"
+                            ? `${(appliedCoupon.value * 100).toFixed(0)}% OFF`
+                            : `R$ ${appliedCoupon.value.toFixed(2)} OFF`}
+                          )
+                        </span>
+                        <Button variant="ghost" size="icon" onClick={handleRemoveCoupon}>
+                          <X className="w-4 h-4 text-green-800" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex space-x-2">
+                        <Input
+                          placeholder="Digite seu cupom"
+                          value={couponInput}
+                          onChange={(e) => setCouponInput(e.target.value)}
+                          className="flex-1"
+                          disabled={!isConnected}
+                        />
+                        <Button onClick={handleApplyCoupon} disabled={!isConnected}>
+                          Aplicar
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  {/* Fim Seção de Cupom */}
+
                   <div className="flex justify-between items-center text-lg font-semibold">
-                    <span>Total:</span>
-                    <span className="text-primary">R$ {getTotalPrice().toFixed(2)}</span>
+                    <span>Subtotal:</span>
+                    <span>R$ {getTotalPrice().toFixed(2)}</span>
+                  </div>
+                  {appliedCoupon && (
+                    <div className="flex justify-between items-center text-sm text-green-600">
+                      <span>Desconto ({appliedCoupon.code}):</span>
+                      <span>-R$ {getDiscountAmount().toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center text-xl font-bold text-primary">
+                    <span>Total Final:</span>
+                    <span>R$ {getFinalPrice().toFixed(2)}</span>
                   </div>
                   <Button
                     className="w-full"
@@ -555,31 +994,43 @@ export default function Index() {
                     onMouseLeave={(e) => {
                       e.currentTarget.style.backgroundColor = customization.button_color
                     }}
-                    onClick={() => {
-                      if (!isConnected) {
-                        toast({
-                          title: "Erro de Conexão",
-                          description: "Não é possível finalizar pedido: banco de dados offline",
-                          variant: "destructive",
-                        })
-                        return
-                      }
-                      window.open(generateWhatsAppMessage(), "_blank")
-                      toast({
-                        title: "Redirecionando",
-                        description: "Abrindo WhatsApp para finalizar seu pedido...",
-                        variant: "default",
-                      })
-                    }}
-                    disabled={!isConnected}
+                    onClick={() => handleFinalizeOrder("whatsapp")}
+                    disabled={isCheckoutDisabled()} // Adicionado disabled
                   >
-                    {isConnected ? "Finalizar no WhatsApp" : "Offline - WhatsApp indisponível"}
+                    {isCheckoutDisabled() ? "Finalizar (Cupom Esgotado/Offline)" : "Finalizar no WhatsApp"}
+                  </Button>
+                  {/* Botão PIX agora usa o estado de loading */}
+                  <Button
+                    className="w-full bg-transparent"
+                    variant="outline"
+                    onClick={() => handleFinalizeOrder("pix")}
+                    disabled={isCheckoutDisabled() || isGeneratingPix} // Adicionado disabled e isGeneratingPix
+                  >
+                    {isGeneratingPix ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Gerando PIX...
+                      </>
+                    ) : (
+                      <>
+                        <QrCode className="w-4 h-4 mr-2" />
+                        Pagar com PIX
+                      </>
+                    )}
                   </Button>
                 </div>
               )}
             </div>
           </div>
         </div>
+      )}
+      {/* PixModal agora recebe os códigos dinâmicos */}
+      {dynamicPixCode && dynamicQrCodeUrl && (
+        <PixModal
+          isOpen={isPixModalOpen}
+          onClose={() => setIsPixModalOpen(false)}
+          pixCode={dynamicPixCode}
+          qrCodeUrl={dynamicQrCodeUrl}
+        />
       )}
     </div>
   )

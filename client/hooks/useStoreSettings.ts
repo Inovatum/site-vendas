@@ -11,8 +11,9 @@ export interface StoreSettings {
   monthly_sales: number
   footer_text: string | null
   footer_company_name: string | null
-  browser_tab_title: string // NEW FIELD
-  favicon_url: string | null // NEW FIELD
+  browser_tab_title: string
+  favicon_url: string | null
+  pix_copy_paste: string | null // NOVO CAMPO
   created_at: string
   updated_at: string
 }
@@ -22,8 +23,9 @@ export interface StoreSettingsUpdate {
   whatsapp_number?: string
   footer_text?: string | null
   footer_company_name?: string | null
-  browser_tab_title?: string // NEW FIELD
-  favicon_url?: string | null // NEW FIELD
+  browser_tab_title?: string
+  favicon_url?: string | null
+  pix_copy_paste?: string | null // NOVO CAMPO
 }
 
 export function useStoreSettings() {
@@ -81,8 +83,9 @@ export function useStoreSettings() {
         monthly_sales: 0,
         footer_text: "© 2024 Minha Loja. Todos os direitos reservados.",
         footer_company_name: "Minha Loja",
-        browser_tab_title: "Minha Loja Online", // Default for new field
-        favicon_url: "/placeholder.svg?height=32&width=32", // Default for new field
+        browser_tab_title: "Minha Loja Online",
+        favicon_url: "/placeholder.svg?height=32&width=32",
+        pix_copy_paste: null, // Default para o novo campo
       }
       const { data, error } = await supabase.from("store_settings").insert([defaultSettings]).select().single()
       if (error) throw error

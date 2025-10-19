@@ -1,358 +1,597 @@
 "use client"
 
-import { useState, useEffect, type ChangeEvent } from "react"
-import {
-  Plus,
-  Edit2,
-  Trash2,
-  Settings,
-  Package,
-  MessageCircle,
-  BarChart3,
-  LogOut,
-  Loader2,
-  XCircle,
-} from "lucide-react"
+import { useState } from "react"
+import { ShoppingCart, Search, X, Plus, Minus, Trash2, Loader2, QrCode } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Link, useNavigate } from "react-router-dom"
+import { Link } from "react-router-dom"
 import { useProducts } from "@/hooks/useProducts"
 import { useStoreSettings } from "@/hooks/useStoreSettings"
 import { useStoreCustomization } from "@/hooks/useStoreCustomization"
 import { useCategories } from "@/hooks/useCategories"
-import { useAdminAuth } from "@/hooks/useAdminAuth"
-import { useToast } from "@/hooks/use-toast"
-import ProductModal from "@/components/ProductModal"
-import VisualCustomization from "@/components/VisualCustomization"
 import DynamicStyles from "@/components/DynamicStyles"
-import type { Product, ProductInsert, ProductUpdate } from "@/lib/supabase"
-import { convertFileToBase64 } from "@/lib/image-utils" // Importar a nova função de conversão
+import { supabase } from "@/lib/supabase" // Importar supabase client
+import type { Product } from "@/lib/supabase"
+import { useToast } from "@/hooks/use-toast"
+import PixModal from "@/components/PixModal"
 
-export default function Admin() {
-  const [isProductModalOpen, setIsProductModalOpen] = useState(false)
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
-  const [modalMode, setModalMode] = useState<"add" | "edit">("add")
-  const [tempStoreName, setTempStoreName] = useState("")
-  const [tempWhatsappNumber, setTempWhatsappNumber] = useState("")
-  const [tempFooterText, setTempFooterText] = useState("")
-  const [tempFooterCompanyName, setTempFooterCompanyName] = useState("")
-  // NOVOS ESTADOS PARA TÍTULO DA ABA E FAVICON
-  const [tempBrowserTabTitle, setTempBrowserTabTitle] = useState("")
-  const [tempFaviconUrl, setTempFaviconUrl] = useState<string | null>(null) // Pode ser null se não houver favicon
-  const [faviconFile, setFaviconFile] = useState<File | null>(null) // Estado para o arquivo selecionado
-  // Removido isUploadingFavicon, pois a conversão é local
-  // FIM NOVOS ESTADOS
-  const [newCategoryName, setNewCategoryName] = useState("")
-  const [isSavingSettings, setIsSavingSettings] = useState(false)
-  const navigate = useNavigate()
+interface CartItem extends Product {
+  quantity: number
+  selectedSize?: string
+  selectedColor?: string
+}
 
-  const {
-    products,
-    loading,
-    error,
-    isConnected,
-    addProduct,
-    updateProduct,
-    deleteProduct,
-    toggleProductStatus: toggleStatus,
-  } = useProducts()
+// Função auxiliar para escurecer cor
+function darkenColor(hex: string, percent: number): string {
+  if (!hex || !hex.startsWith("#")) return hex
+  const num = Number.parseInt(hex.slice(1), 16)
+  const amt = Math.round(2.55 * percent)
+  const R = (num >> 16) - amt
+  const G = ((num >> 8) & 0x00ff) - amt
+  const B = (num & 0x0000ff) - amt
+  return `#${(
+    0x1000000 +
+    (R < 255 ? (R < 1 ? 0 : R) : 255) * 0x10000 +
+    (G < 255 ? (G < 1 ? 0 : G) : 255) * 0x100 +
+    (B < 255 ? (B < 1 ? 0 : B) : 255)
+  )
+    .toString(16)
+    .slice(1)}`
+}
 
-  const { settings, loading: settingsLoading, updateSettings, error: settingsError } = useStoreSettings()
+export default function Index() {
+  const [cart, setCart] = useState<CartItem[]>([])
+  const [isCartOpen, setIsCartOpen] = useState(false)
+  const [searchTerm, setSearchTerm] = useState("")
+  const [selectedCategory, setSelectedCategory] = useState("Todos")
+  const [selectedSizes, setSelectedSizes] = useState<{ [key: number]: string }>({})
+  const [activeImages, setActiveImages] = useState<{ [key: number]: number }>({})
+  const [isPixModalOpen, setIsPixModalOpen] = useState(false)
+  const [dynamicPixCode, setDynamicPixCode] = useState<string | null>(null) // Novo estado para o código PIX dinâmico
+  const [dynamicQrCodeUrl, setDynamicQrCodeUrl] = useState<string | null>(null) // Novo estado para a URL do QR Code dinâmico
+  const [isGeneratingPix, setIsGeneratingPix] = useState(false) // Novo estado para loading do PIX
+  // NOVOS ESTADOS PARA CUPOM
+  const [couponInput, setCouponInput] = useState("")
+  const [appliedCoupon, setAppliedCoupon] = useState<{
+    code: string
+    type: "percentage" | "fixed"
+    value: number
+    usageLimit: number | null // NOVO: Limite de uso
+  } | null>(null)
+  // FIM NOVOS ESTADOS PARA CUPOM
 
+  const { products, loading, error, isConnected } = useProducts()
+  const { settings, fetchSettings } = useStoreSettings() // Importar fetchSettings para revalidar
   const { customization, loading: customizationLoading } = useStoreCustomization()
-  const { categories, addCategory, deleteCategory, toggleCategoryStatus } = useCategories()
-  const { checkAuth, isAuthenticated, logout } = useAdminAuth()
+  const { activeCategories } = useCategories()
   const { toast } = useToast()
 
-  useEffect(() => {
-    const isAuth = checkAuth()
-    if (!isAuth) {
-      navigate("/admin-login")
-    }
-  }, [navigate, checkAuth]) // checkAuth deve estar nas dependências
+  // Só mostrar produtos ativos na loja
+  const activeProducts = products.filter((product) => product.status === "active")
 
-  useEffect(() => {
-    // Inicializar campos temporários quando settings carregarem
-    if (settings) {
-      setTempStoreName(settings.store_name)
-      setTempWhatsappNumber(settings.whatsapp_number)
-      setTempFooterText(settings.footer_text || "© 2024 Minha Loja. Todos os direitos reservados.")
-      setTempFooterCompanyName(settings.footer_company_name || "Minha Loja")
-      // Inicializar novos campos
-      setTempBrowserTabTitle(settings.browser_tab_title || "Loja Rafael - Admin")
-      setTempFaviconUrl(settings.favicon_url || null) // Inicializar com URL existente ou null
-    }
-  }, [settings])
+  // Usar categorias do banco (com fallback para categorias dos produtos se não houver no banco)
+  const categories =
+    activeCategories.length > 0
+      ? ["Todos", ...activeCategories.map((cat) => cat.name)]
+      : ["Todos", ...Array.from(new Set(products.map((p) => p.category)))]
 
-  const handleLogout = () => {
-    logout() // Chamar a função logout do hook useAdminAuth
-    navigate("/admin-login")
-  }
+  const filteredProducts = activeProducts.filter((product) => {
+    const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchesCategory = selectedCategory === "Todos" || product.category === selectedCategory
+    return matchesSearch && matchesCategory
+  })
 
-  const activeProducts = products.filter((p) => p.status === "active")
-  const totalProducts = products.length
-  const whatsappProducts = activeProducts.length
-
-  const statsCards = [
-    {
-      title: "Total de Produtos",
-      value: totalProducts,
-      description: "produtos cadastrados",
-      icon: Package,
-      color: "text-blue-600",
-    },
-    {
-      title: "Produtos WhatsApp",
-      value: whatsappProducts,
-      description: "ativos no WhatsApp",
-      icon: MessageCircle,
-      color: "text-green-600",
-    },
-    {
-      title: "Vendas do Mês",
-      value: settings?.monthly_sales || 0,
-      description: "vendas realizadas",
-      icon: BarChart3,
-      color: "text-primary",
-    },
-  ]
-
-  const handleAddProduct = () => {
-    setModalMode("add")
-    setEditingProduct(null)
-    setIsProductModalOpen(true)
-  }
-
-  const handleEditProduct = (product: Product) => {
-    console.log("🔧 === INICIANDO EDIÇÃO ===")
-    console.log("🔧 Produto clicado para editar:")
-    console.log("   - ID:", product.id)
-    console.log("   - Nome:", product.name)
-    console.log("   - Categoria:", product.category)
-    console.log("   - Preço:", product.price)
-    console.log("🔧 Estado atual de editingProduct:", editingProduct?.name || "null")
-    console.log(
-      "🔧 Lista completa de produtos:",
-      products.map((p) => ({ id: p.id, name: p.name })),
-    )
-    console.log("🔧 ========================")
-    setModalMode("edit")
-    setEditingProduct(product)
-    setIsProductModalOpen(true)
-  }
-
-  const handleSaveProduct = async (productData: ProductInsert | ProductUpdate): Promise<boolean> => {
-    if (modalMode === "add") {
-      return await addProduct(productData as ProductInsert)
-    } else {
-      return await updateProduct(productData as ProductUpdate)
-    }
-  }
-
-  const handleDeleteProduct = async (id: number) => {
-    console.log("🗑️ Deletando produto ID:", id)
-    const success = await deleteProduct(id)
-    if (!success) {
-      console.error("Falha ao deletar produto")
-    }
-  }
-
-  const handleToggleStatus = async (id: number) => {
-    console.log("🔄 Alternando status do produto ID:", id)
-    const success = await toggleStatus(id)
-    if (!success) {
-      console.error("Falha ao alterar status do produto")
-    }
-  }
-
-  // NOVA FUNÇÃO PARA MANIPULAR A SELEÇÃO DO ARQUIVO FAVICON
-  const handleFaviconChange = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0]
-      setFaviconFile(file)
-      // Mostra uma prévia local do arquivo selecionado (Base64)
-      const reader = new FileReader()
-      reader.onload = () => {
-        setTempFaviconUrl(reader.result as string)
-      }
-      reader.readAsDataURL(file)
-    } else {
-      setFaviconFile(null)
-      // Se nenhum arquivo for selecionado, reverte para o favicon salvo ou padrão
-      setTempFaviconUrl(settings?.favicon_url || null)
-    }
-  }
-
-  // NOVA FUNÇÃO PARA LIMPAR O FAVICON
-  const handleClearFavicon = () => {
-    setFaviconFile(null)
-    setTempFaviconUrl(null) // Limpa a prévia/URL atual
-    // Ao salvar, isso definirá favicon_url como null no DB
-  }
-
-  const handleSaveSettings = async () => {
-    setIsSavingSettings(true)
-    let finalFaviconUrl = tempFaviconUrl // Começa com a URL atual ou definida manualmente
-
-    try {
-      if (faviconFile) {
-        // Converte o arquivo para Base64 antes de salvar no banco
-        toast({
-          title: "Processando Favicon",
-          description: "Convertendo imagem do favicon...",
-          duration: 3000,
-        })
-        finalFaviconUrl = await convertFileToBase64(faviconFile)
-        toast({
-          title: "Processamento Concluído",
-          description: "Favicon pronto para salvar!",
-          variant: "default",
-        })
-      }
-
-      if (settings) {
-        const success = await updateSettings({
-          store_name: tempStoreName,
-          whatsapp_number: tempWhatsappNumber,
-          footer_text: tempFooterText,
-          footer_company_name: tempFooterCompanyName,
-          browser_tab_title: tempBrowserTabTitle, // Incluir o novo campo
-          favicon_url: finalFaviconUrl, // Incluir o novo campo (agora Base64 ou null)
-        })
-        if (success) {
-          console.log("Configurações salvas com sucesso!")
-        }
-      }
-    } catch (error) {
-      console.error("Erro ao salvar configurações:", error)
+  const addToCart = (product: Product) => {
+    // Verificar se está conectado ao banco
+    if (!isConnected) {
       toast({
-        title: "Erro ao Salvar",
-        description: "Não foi possível salvar as configurações da loja.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsSavingSettings(false)
-      setFaviconFile(null) // Limpa o input de arquivo após salvar
-    }
-  }
-
-  const handleAddCategory = async () => {
-    if (!newCategoryName.trim()) {
-      toast({
-        title: "Campo Obrigatório",
-        description: "Digite um nome para a categoria",
+        title: "Erro de Conexão",
+        description: "Não é possível adicionar ao carrinho: banco de dados offline",
         variant: "destructive",
       })
       return
     }
-    const categoryName = newCategoryName.trim()
-    const exists = categories.find((cat) => cat.name.toLowerCase() === categoryName.toLowerCase())
-    if (exists) {
-      toast({
-        title: "Categoria Já Existe",
-        description: `A categoria "${categoryName}" já foi criada anteriormente.`,
-        variant: "destructive",
-      })
-      return
+    // Verificar se o produto tem tamanhos e se um foi selecionado
+    if (product.sizes && product.sizes.length > 0) {
+      const selectedSize = selectedSizes[product.id]
+      if (!selectedSize) {
+        toast({
+          title: "Tamanho Obrigatório",
+          description: "Por favor, selecione um tamanho antes de adicionar ao carrinho.",
+          variant: "destructive",
+        })
+        return
+      }
     }
-    console.log("🏷️ Tentando adicionar categoria:", categoryName)
-    const success = await addCategory({
-      name: categoryName,
-      display_order: categories.length + 1,
+    const selectedSize = selectedSizes[product.id]
+    setCart((prev) => {
+      const existingItem = prev.find((item) => item.id === product.id && item.selectedSize === selectedSize)
+      if (existingItem) {
+        return prev.map((item) =>
+          item.id === product.id && item.selectedSize === selectedSize
+            ? { ...item, quantity: item.quantity + 1 }
+            : item,
+        )
+      }
+      return [
+        ...prev,
+        {
+          ...product,
+          quantity: 1,
+          selectedSize: selectedSize,
+        },
+      ]
     })
-    if (success) {
-      setNewCategoryName("")
+    // Limpar seleção de tamanho após adicionar
+    if (product.sizes && product.sizes.length > 0) {
+      setSelectedSizes((prev) => ({ ...prev, [product.id]: "" }))
+    }
+    // Toast de sucesso
+    toast({
+      title: "Produto Adicionado",
+      description: `${product.name} foi adicionado ao carrinho!`,
+      variant: "default",
+    })
+  }
+
+  const updateQuantity = (id: number, quantity: number) => {
+    if (quantity <= 0) {
+      setCart((prev) => prev.filter((item) => item.id !== id))
+    } else {
+      setCart((prev) => prev.map((item) => (item.id === id ? { ...item, quantity } : item)))
+    }
+  }
+
+  const removeFromCart = (id: number) => {
+    setCart((prev) => prev.filter((item) => item.id !== id))
+  }
+
+  const getTotalPrice = () => {
+    return cart.reduce((total, item) => total + item.price * item.quantity, 0)
+  }
+
+  const getFinalPrice = () => {
+    let total = getTotalPrice()
+    if (appliedCoupon) {
+      if (appliedCoupon.type === "percentage") {
+        total = total * (1 - appliedCoupon.value)
+      } else if (appliedCoupon.type === "fixed") {
+        total = Math.max(0, total - appliedCoupon.value) // Ensure total doesn't go below 0
+      }
+    }
+    return total
+  }
+
+  const getDiscountAmount = () => {
+    return getTotalPrice() - getFinalPrice()
+  }
+
+  const getCartItemsCount = () => {
+    return cart.reduce((total, item) => total + item.quantity, 0)
+  }
+
+  // Função para decrementar o uso do cupom no banco de dados
+  const decrementCouponUsage = async (couponCode: string) => {
+    if (!isConnected) {
+      console.warn("Não conectado ao banco de dados, não é possível decrementar o uso do cupom.")
+      return false
+    }
+    try {
+      console.log(`Frontend: Chamando decrement_coupon_usage para "${couponCode}"`)
+      const { data, error } = await supabase.rpc("decrement_coupon_usage", {
+        p_coupon_code: couponCode,
+      })
+
+      if (error) {
+        console.error("Frontend: Erro ao decrementar uso do cupom:", error)
+        toast({
+          title: "Erro no Cupom",
+          description: `Não foi possível registrar o uso do cupom "${couponCode}".`,
+          variant: "destructive",
+        })
+        return false
+      }
+
+      if (data === true) {
+        console.log(`Frontend: Uso do cupom "${couponCode}" decrementado com sucesso.`)
+        // Revalidar as configurações da loja para refletir o novo limite
+        await fetchSettings()
+        return true
+      } else {
+        console.warn(
+          `Frontend: Cupom "${couponCode}" não decrementado (limite 0 ou ilimitado, ou código não encontrado).`,
+        )
+        return false
+      }
+    } catch (err) {
+      console.error("Frontend: Erro inesperado ao chamar decrement_coupon_usage:", err)
       toast({
-        title: "Categoria Adicionada",
-        description: `"${categoryName}" foi criada com sucesso!`,
+        title: "Erro Inesperado",
+        description: "Ocorreu um erro ao tentar registrar o uso do cupom.",
+        variant: "destructive",
+      })
+      return false
+    }
+  }
+
+  const handleFinalizeOrder = async (method: "whatsapp" | "pix") => {
+    if (!isConnected) {
+      toast({
+        title: "Erro de Conexão",
+        description: "Não é possível finalizar pedido: banco de dados offline",
+        variant: "destructive",
+      })
+      return
+    }
+
+    console.log("Iniciando finalização do pedido...")
+
+    // VERIFICAÇÃO ADICIONAL PARA CUPOM ANTES DE PROSSEGUIR
+    if (appliedCoupon) {
+      console.log(`Cupom aplicado: ${appliedCoupon.code}. Verificando limite de uso...`)
+      // Encontrar o cupom correspondente nas configurações mais recentes
+      const currentCouponInSettings = [
+        settings?.coupon_code_1 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_1,
+              value: settings?.coupon_value_1,
+              usageLimit: settings?.coupon_usage_limit_1,
+              expiration: settings?.coupon_expiration_1,
+            }
+          : null,
+        settings?.coupon_code_2 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_2,
+              value: settings?.coupon_value_2,
+              usageLimit: settings?.coupon_usage_limit_2,
+              expiration: settings?.coupon_expiration_2,
+            }
+          : null,
+        settings?.coupon_code_3 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_3,
+              value: settings?.coupon_value_3,
+              usageLimit: settings?.coupon_usage_limit_3,
+              expiration: settings?.coupon_expiration_3,
+            }
+          : null,
+      ].find((c) => c !== null)
+
+      if (currentCouponInSettings) {
+        console.log("Detalhes do cupom nas configurações:", currentCouponInSettings)
+        // Verificar se o cupom expirou
+        if (currentCouponInSettings.expiration) {
+          const expirationDate = new Date(currentCouponInSettings.expiration)
+          if (new Date() > expirationDate) {
+            toast({
+              title: "Cupom Expirado",
+              description: `O cupom "${appliedCoupon.code}" expirou.`,
+              variant: "destructive",
+            })
+            setAppliedCoupon(null) // Remover cupom aplicado
+            setCouponInput("") // Limpar input
+            return // Interromper o checkout
+          }
+        }
+
+        // Verificar se o limite de uso foi atingido
+        if (currentCouponInSettings.usageLimit !== null && currentCouponInSettings.usageLimit <= 0) {
+          toast({
+            title: "Cupom Esgotado",
+            description: `O cupom "${appliedCoupon.code}" já atingiu seu limite de usos.`,
+            variant: "destructive",
+          })
+          setAppliedCoupon(null) // Remover cupom aplicado
+          setCouponInput("") // Limpar input
+          return // Interromper o checkout
+        }
+      } else {
+        // Se o cupom aplicado não for encontrado nas configurações (foi removido ou código inválido)
+        toast({
+          title: "Cupom Inválido",
+          description: `O cupom "${appliedCoupon.code}" não é mais válido.`,
+          variant: "destructive",
+        })
+        setAppliedCoupon(null) // Remover cupom aplicado
+        setCouponInput("") // Limpar input
+        return // Interromper o checkout
+      }
+
+      // Se o cupom ainda é válido, tentar decrementar o uso
+      const couponDecrementedSuccessfully = await decrementCouponUsage(appliedCoupon.code)
+      if (!couponDecrementedSuccessfully) {
+        // Se o decremento falhar (ex: limite já 0 ou cupom não encontrado/válido para decremento), avisar e não prosseguir com o checkout
+        toast({
+          title: "Cupom Esgotado ou Inválido",
+          description: `O cupom "${appliedCoupon.code}" não pode ser usado. Limite de usos atingido ou cupom inválido.`,
+          variant: "destructive",
+        })
+        setAppliedCoupon(null) // Remover cupom aplicado
+        setCouponInput("") // Limpar input
+        return // Interromper o checkout
+      }
+    }
+
+    console.log("Prosseguindo com a finalização do pedido...")
+
+    if (method === "whatsapp") {
+      const storeName = settings?.store_name || "Minha Loja"
+      const message =
+        `🛍️ *Pedido ${storeName}*\n\n` +
+        cart
+          .map(
+            (item) =>
+              `• ${item.name}\n` +
+              (item.selectedSize ? `  Tamanho: ${item.selectedSize}\n` : "") +
+              `  Quantidade: ${item.quantity}\n` +
+              `  Preço unitário: R$ ${item.price.toFixed(2)}\n` +
+              `  Subtotal: R$ ${(item.price * item.quantity).toFixed(2)}\n`,
+          )
+          .join("\n") +
+        `\n💰 *Total: R$ ${getTotalPrice().toFixed(2)}*\n` +
+        (appliedCoupon ? `Desconto (${appliedCoupon.code}): -R$ ${getDiscountAmount().toFixed(2)}\n` : "") +
+        `*Total Final: R$ ${getFinalPrice().toFixed(2)}*\n\n` +
+        `Gostaria de finalizar este pedido!`
+      const encodedMessage = encodeURIComponent(message)
+      const whatsappNumber = settings?.whatsapp_number || "5511999999999"
+      window.open(`https://wa.me/${whatsappNumber}?text=${encodedMessage}`, "_blank")
+      toast({
+        title: "Redirecionando",
+        description: "Abrindo WhatsApp para finalizar seu pedido...",
         variant: "default",
       })
-      console.log("✅ Categoria adicionada com sucesso!")
-    } else {
+    } else if (method === "pix") {
+      setIsGeneratingPix(true)
+      try {
+        const finalPrice = getFinalPrice()
+        console.log(`Chamando Edge Function para gerar PIX com valor: ${finalPrice}`)
+        const response = await fetch("https://dkzbhymqatlnwkdhjyzd.supabase.co/functions/v1/generate-pix", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ amount: finalPrice }),
+        })
+
+        const data = await response.json()
+
+        if (!response.ok) {
+          console.error("Erro ao gerar PIX da Edge Function:", data)
+          toast({
+            title: "Erro ao Gerar PIX",
+            description: `Não foi possível gerar o código PIX. ${data.error || "Erro desconhecido"}`,
+            variant: "destructive",
+          })
+          return
+        }
+
+        if (data && typeof data === "object" && "pix_code" in data && "qr_code_base64" in data) {
+          setDynamicPixCode(data.pix_code)
+          setDynamicQrCodeUrl(data.qr_code_base64)
+          setIsPixModalOpen(true)
+        } else {
+          toast({
+            title: "Erro ao Gerar PIX",
+            description: "Resposta inesperada da função de geração PIX.",
+            variant: "destructive",
+          })
+        }
+      } catch (err) {
+        console.error("Erro inesperado na geração PIX:", err)
+        toast({
+          title: "Erro Inesperado",
+          description: "Ocorreu um erro ao tentar gerar o PIX.",
+          variant: "destructive",
+        })
+      } finally {
+        setIsGeneratingPix(false)
+      }
+    }
+  }
+
+  // FUNÇÃO PARA APLICAR CUPOM
+  const handleApplyCoupon = () => {
+    if (!isConnected) {
       toast({
-        title: "Erro ao Adicionar",
-        description: "Não foi possível criar a categoria. Verifique os logs do console.",
+        title: "Erro de Conexão",
+        description: "Não é possível aplicar cupom: banco de dados offline",
         variant: "destructive",
       })
-      console.error("❌ Falha ao adicionar categoria")
+      return
+    }
+    if (!couponInput.trim()) {
+      toast({
+        title: "Cupom Vazio",
+        description: "Por favor, digite um código de cupom.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const inputCode = couponInput.trim().toUpperCase()
+    let foundCoupon: {
+      code: string
+      type: "percentage" | "fixed"
+      value: number
+      expiration: string | null
+      usageLimit: number | null // NOVO
+    } | null = null
+
+    const coupons = [
+      {
+        code: settings?.coupon_code_1,
+        type: settings?.coupon_type_1,
+        value: settings?.coupon_value_1,
+        expiration: settings?.coupon_expiration_1,
+        usageLimit: settings?.coupon_usage_limit_1, // NOVO
+      },
+      {
+        code: settings?.coupon_code_2,
+        type: settings?.coupon_type_2,
+        value: settings?.coupon_value_2,
+        expiration: settings?.coupon_expiration_2,
+        usageLimit: settings?.coupon_usage_limit_2, // NOVO
+      },
+      {
+        code: settings?.coupon_code_3,
+        type: settings?.coupon_type_3,
+        value: settings?.coupon_value_3,
+        expiration: settings?.coupon_expiration_3,
+        usageLimit: settings?.coupon_usage_limit_3, // NOVO
+      },
+    ]
+
+    for (const coupon of coupons) {
+      if (coupon.code?.toUpperCase() === inputCode && coupon.type && coupon.value !== null) {
+        // Check expiration
+        if (coupon.expiration) {
+          const expirationDate = new Date(coupon.expiration)
+          if (new Date() > expirationDate) {
+            toast({
+              title: "Cupom Expirado",
+              description: `O cupom "${coupon.code}" expirou em ${expirationDate.toLocaleDateString()} às ${expirationDate.toLocaleTimeString()}.`,
+              variant: "destructive",
+            })
+            return
+          }
+        }
+
+        // Check usage limit (client-side only)
+        // IMPORTANT: For a robust global usage limit, this check should be done server-side
+        // and the usage count should be decremented in a transaction.
+        if (coupon.usageLimit !== null && coupon.usageLimit <= 0) {
+          toast({
+            title: "Cupom Esgotado",
+            description: `O cupom "${coupon.code}" já atingiu seu limite de usos.`,
+            variant: "destructive",
+          })
+          return
+        }
+
+        foundCoupon = {
+          code: coupon.code,
+          type: coupon.type,
+          value: coupon.value,
+          expiration: coupon.expiration,
+          usageLimit: coupon.usageLimit, // NOVO
+        }
+        break
+      }
+    }
+
+    if (foundCoupon) {
+      setAppliedCoupon(foundCoupon)
+      toast({
+        title: "Cupom Aplicado!",
+        description: `Desconto de ${
+          foundCoupon.type === "percentage"
+            ? `${(foundCoupon.value * 100).toFixed(0)}%`
+            : `R$ ${foundCoupon.value.toFixed(2)}`
+        } aplicado com sucesso.`,
+        variant: "default",
+      })
+    } else {
+      setAppliedCoupon(null)
+      toast({
+        title: "Cupom Inválido",
+        description: "O código do cupom inserido não é válido ou não está ativo.",
+        variant: "destructive",
+      })
     }
   }
 
-  const handleDeleteCategory = async (id: number) => {
-    if (confirm("Tem certeza que deseja excluir esta categoria?")) {
-      await deleteCategory(id)
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null)
+    setCouponInput("")
+    toast({
+      title: "Cupom Removido",
+      description: "O cupom de desconto foi removido.",
+      variant: "default",
+    })
+  }
+  // FIM FUNÇÕES DE CUPOM
+
+  // Lógica para determinar se os botões de finalizar devem ser desabilitados
+  const isCheckoutDisabled = () => {
+    if (!isConnected) return true // Sempre desabilitar se não houver conexão
+    if (cart.length === 0) return true // Desabilitar se o carrinho estiver vazio
+
+    if (appliedCoupon) {
+      // Encontrar o cupom correspondente nas configurações mais recentes
+      const currentCouponInSettings = [
+        settings?.coupon_code_1 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_1,
+              value: settings?.coupon_value_1,
+              usageLimit: settings?.coupon_usage_limit_1,
+              expiration: settings?.coupon_expiration_1,
+            }
+          : null,
+        settings?.coupon_code_2 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_2,
+              value: settings?.coupon_value_2,
+              usageLimit: settings?.coupon_usage_limit_2,
+              expiration: settings?.coupon_expiration_2,
+            }
+          : null,
+        settings?.coupon_code_3 === appliedCoupon.code
+          ? {
+              type: settings?.coupon_type_3,
+              value: settings?.coupon_value_3,
+              usageLimit: settings?.coupon_usage_limit_3,
+              expiration: settings?.coupon_expiration_3,
+            }
+          : null,
+      ].find((c) => c !== null)
+
+      if (!currentCouponInSettings) {
+        // Se o cupom aplicado não for encontrado nas configurações (foi removido ou código inválido)
+        return true
+      }
+
+      // Verificar se o cupom expirou
+      if (currentCouponInSettings.expiration) {
+        const expirationDate = new Date(currentCouponInSettings.expiration)
+        if (new Date() > expirationDate) {
+          return true
+        }
+      }
+
+      // Verificar se o limite de uso foi atingido
+      if (currentCouponInSettings.usageLimit !== null && currentCouponInSettings.usageLimit <= 0) {
+        return true
+      }
     }
+    return false
   }
 
-  const handleToggleCategoryStatus = async (id: number) => {
-    await toggleCategoryStatus(id)
-  }
-
-  // Adicionado tratamento de carregamento e erro para autenticação e configurações
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-gray-600" />
-          <p className="text-gray-600">Verificando autenticação...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (settingsLoading) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-gray-600" />
-          <p className="text-gray-600">Carregando configurações da loja...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (settingsError) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <div className="text-center p-4">
-          <h1 className="text-2xl font-bold text-red-600 mb-4">Erro ao Carregar Configurações</h1>
-          <p className="text-gray-700 mb-4">Ocorreu um erro ao carregar as configurações da loja: {settingsError}</p>
-          <p className="text-gray-500">
-            Por favor, verifique sua conexão com o Supabase e se a tabela `store_settings` está configurada
-            corretamente.
-          </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-6 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-          >
-            Tentar Novamente
-          </button>
-        </div>
-      </div>
-    )
-  }
-
+  // Aguardar customização carregar para evitar flash de cores padrão
   if (customizationLoading || !customization) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-gray-600" />
-          <p className="text-gray-600">Carregando painel...</p>
+          <p className="text-gray-600">Carregando...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div
+      key={customization.id + customization.button_color}
+      className="min-h-screen"
+      style={{ backgroundColor: customization.site_background_color }}
+    >
       <DynamicStyles customization={customization} />
       {/* Header */}
-      <header className="bg-white shadow-sm border-b">
+      <header className="shadow-sm sticky top-0 z-40" style={{ backgroundColor: customization.header_color }}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-4">
+            {/* Logo */}
+            <div className="flex items-center">
               <div className="flex items-center space-x-2">
                 {customization.show_logo &&
                   (customization.logo_url ? (
@@ -370,435 +609,429 @@ export default function Admin() {
                       </span>
                     </div>
                   ))}
-                <span className="text-xl font-bold text-gray-900">{settings?.store_name || "Minha Loja"}</span>
+                {customization.show_store_name && (
+                  <span className="text-xl font-bold text-gray-900">{settings?.store_name || "Minha Loja"}</span>
+                )}
               </div>
-              <Badge variant="secondary" className="ml-4">
-                Admin
-              </Badge>
             </div>
+            {/* Search */}
+            <div className="flex-1 max-w-lg mx-8">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <Input
+                  placeholder="Buscar roupas, perfumes..."
+                  className="pl-10"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+            </div>
+            {/* Actions */}
             <div className="flex items-center space-x-4">
-              <Button variant="outline" size="sm" asChild>
-                <Link to="/">Ver Loja</Link>
-              </Button>
-              <Button variant="ghost" size="sm" onClick={handleLogout}>
-                <LogOut className="w-4 h-4 mr-2" />
-                Sair
+              <Button variant="ghost" size="icon" className="relative" onClick={() => setIsCartOpen(true)}>
+                <ShoppingCart className="w-5 h-5" />
+                {getCartItemsCount() > 0 && (
+                  <Badge className="absolute -top-2 -right-2 w-5 h-5 rounded-full p-0 flex items-center justify-center text-xs">
+                    {getCartItemsCount()}
+                  </Badge>
+                )}
               </Button>
             </div>
           </div>
         </div>
       </header>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Page Header */}
-        <div className="mb-8">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Painel Administrativo</h1>
-          <p className="text-gray-600">Gerencie produtos, pedidos e usuários</p>
+      {/* Category Filter */}
+      <div className="border-b menu-filter" style={{ backgroundColor: customization.menu_color }}>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex space-x-8 overflow-x-auto py-4">
+            {categories.map((category) => (
+              <button
+                key={category}
+                onClick={() => setSelectedCategory(category)}
+                className={`whitespace-nowrap pb-2 px-1 border-b-2 font-medium text-sm ${
+                  selectedCategory === category
+                    ? "border-primary text-primary"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                }`}
+              >
+                {category}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Nossos Produtos</h1>
+          <p className="text-gray-600">Descubra as últimas tendências da moda e perfumes exclusivos</p>
           {/* Connection Status */}
           {!isConnected && (
             <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
               <p className="text-sm text-red-800">
-                ⚠️ <strong>Offline:</strong> Banco de dados não conectado - funcionalidades limitadas
+                ⚠️ <strong>Offline:</strong> Banco de dados não conectado
               </p>
             </div>
           )}
         </div>
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          {statsCards.map((stat, index) => (
-            <Card key={index}>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-gray-600">{stat.title}</p>
-                    <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
-                    <p className="text-xs text-gray-500">{stat.description}</p>
-                  </div>
-                  <stat.icon className={`w-8 h-8 ${stat.color}`} />
+        {/* Error State */}
+        {error && (
+          <div className="text-center py-8">
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <p className="text-red-600">Erro: {error}</p>
+              <p className="text-sm text-red-500 mt-2">Verifique as configurações do banco de dados</p>
+            </div>
+          </div>
+        )}
+        {/* Loading State */}
+        {loading && (
+          <div className="text-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-primary" />
+            <p className="text-gray-600">Carregando produtos...</p>
+          </div>
+        )}
+        {/* Empty State */}
+        {!loading && !error && filteredProducts.length === 0 && isConnected && (
+          <div className="text-center py-12">
+            <p className="text-gray-600">Nenhum produto encontrado.</p>
+            <p className="text-sm text-gray-500 mt-2">Adicione produtos no painel administrativo</p>
+          </div>
+        )}
+        {/* Products Grid */}
+        {!loading && !error && filteredProducts.length > 0 && (
+          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {filteredProducts.map((product) => (
+              <div
+                key={product.id}
+                className="rounded-lg shadow-sm hover:shadow-md transition-shadow overflow-hidden group flex flex-col"
+                style={{
+                  backgroundColor: customization.card_background_color,
+                  borderColor: customization.card_border_color,
+                }}
+              >
+                <div
+                  className="aspect-[3/4] overflow-hidden relative group"
+                  onTouchStart={(e) => {
+                    const touchStartX = e.changedTouches[0].clientX
+                    const handleTouchEnd = (endEvent: TouchEvent) => {
+                      const touchEndX = endEvent.changedTouches[0].clientX
+                      const diff = touchStartX - touchEndX
+                      const currentImage = activeImages[product.id] ?? 0
+                      if (Math.abs(diff) > 30 && product.image_2) {
+                        const nextImage = (currentImage + (diff > 0 ? 1 : -1) + 2) % 2
+                        setActiveImages((prev) => ({
+                          ...prev,
+                          [product.id]: nextImage,
+                        }))
+                      }
+                      document.removeEventListener("touchend", handleTouchEnd)
+                    }
+                    document.addEventListener("touchend", handleTouchEnd)
+                  }}
+                >
+                  {/* Imagem principal com fade */}
+                  <img
+                    src={product.image || "/placeholder.svg"}
+                    alt={product.name}
+                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-in-out ${
+                      (activeImages[product.id] ?? 0) === 0 ? "opacity-100 z-10" : "opacity-0 z-0"
+                    }`}
+                  />
+                  {/* Segunda imagem com fade */}
+                  {product.image_2 && (
+                    <img
+                      src={product.image_2 || "/placeholder.svg"}
+                      alt={product.name + " alternativa"}
+                      className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-in-out ${
+                        activeImages[product.id] === 1 ? "opacity-100 z-10" : "opacity-0 z-0"
+                      }`}
+                    />
+                  )}
+                  {/* Botões esquerda e direita */}
+                  {product.image_2 && (
+                    <>
+                      {/* Botão voltar (<) */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setActiveImages((prev) => {
+                            const current = prev[product.id] ?? 0
+                            const next = (current - 1 + 2) % 2
+                            return { ...prev, [product.id]: next }
+                          })
+                        }}
+                        className="absolute left-2 top-1/2 transform -translate-y-1/2 text-white text-3xl font-bold z-20 hover:scale-110 transition-transform"
+                      >
+                        ‹
+                      </button>
+                      {/* Botão avançar (>) */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setActiveImages((prev) => {
+                            const current = prev[product.id] ?? 0
+                            const next = (current + 1) % 2
+                            return { ...prev, [product.id]: next }
+                          })
+                        }}
+                        className="absolute right-2 top-1/2 transform -translate-y-1/2 text-white text-3xl font-bold z-20 hover:scale-110 transition-transform"
+                      >
+                        ›
+                      </button>
+                    </>
+                  )}
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:col-span-3 gap-8">
-          {/* Products Management */}
-          <div className="lg:col-span-2">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Gerenciar Produtos</CardTitle>
-                    <CardDescription>Adicione, edite e remova produtos do catálogo</CardDescription>
+                <div className="p-3 sm:p-4 flex flex-col flex-grow">
+                  <div className="flex-grow">
+                    <h3 className="font-medium text-gray-900 mb-1 text-sm sm:text-base">{product.name}</h3>
+                    <p className="text-primary font-bold mb-2 text-base sm:text-lg">R$ {product.price.toFixed(2)}</p>
+                    {/* Seleção de Tamanhos - Agora sempre renderiza um div com min-height */}
+                    {product.sizes && product.sizes.length > 0 ? (
+                      <div className="mb-3 min-h-[70px]">
+                        <p className="text-xs text-gray-500 mb-2">Escolha o tamanho:</p>
+                        <div className="flex flex-wrap gap-1">
+                          {product.sizes.map((size, index) => (
+                            <button
+                              key={index}
+                              onClick={() =>
+                                setSelectedSizes((prev) => ({
+                                  ...prev,
+                                  [product.id]: prev[product.id] === size ? "" : size,
+                                }))
+                              }
+                              className={`text-xs px-2 py-1 border rounded transition-colors ${
+                                selectedSizes[product.id] === size
+                                  ? "bg-primary text-white border-primary"
+                                  : "bg-white text-gray-700 border-gray-300 hover:border-primary"
+                              }`}
+                            >
+                              {size}
+                            </button>
+                          ))}
+                        </div>
+                        {selectedSizes[product.id] && (
+                          <p className="text-xs text-primary mt-1">Tamanho selecionado: {selectedSizes[product.id]}</p>
+                        )}
+                      </div>
+                    ) : (
+                      // Placeholder para manter a altura consistente quando não há tamanhos
+                      <div className="mb-3 min-h-[70px]">{/* Conteúdo vazio para manter o espaçamento */}</div>
+                    )}
                   </div>
-                  <Button onClick={handleAddProduct}>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Adicionar Produto
+                  <Button
+                    onClick={() => addToCart(product)}
+                    className="w-full mt-2"
+                    size="sm"
+                    disabled={!isConnected}
+                    style={{
+                      backgroundColor: customization.button_color,
+                      color: customization.button_text_color,
+                      border: `1px solid ${customization.button_color}`,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isConnected) return
+                      e.currentTarget.style.backgroundColor = darkenColor(customization.button_color, 10)
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isConnected) return
+                      e.currentTarget.style.backgroundColor = customization.button_color
+                    }}
+                  >
+                    {isConnected ? "Adicionar ao Carrinho" : "Offline"}
                   </Button>
                 </div>
-              </CardHeader>
-              <CardContent>
-                {/* Error State */}
-                {error && (
-                  <div className="text-center py-8">
-                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-                      <p className="text-red-600">Erro ao carregar produtos: {error}</p>
-                    </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+      {/* Footer */}
+      <footer className="border-t mt-16" style={{ backgroundColor: customization.footer_color }}>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2"></div>
+            <Link to="/admin" className="text-xs text-gray-500 hover:text-primary">
+              Admin
+            </Link>
+          </div>
+          <div className="mt-4 text-center">
+            <p className="text-gray-600 text-sm">
+              {settings?.footer_text || "© 2024 Minha Loja. Todos os direitos reservados."}
+            </p>
+            <p className="text-gray-500 text-xs mt-2">{settings?.footer_company_name || "Minha Loja"}</p>
+          </div>
+        </div>
+      </footer>
+      {/* Cart Sidebar */}
+      {isCartOpen && (
+        <div className="fixed inset-0 z-50 overflow-hidden">
+          <div className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setIsCartOpen(false)} />
+          <div
+            className="absolute right-0 top-0 h-full w-full max-w-md shadow-xl cart-panel"
+            style={{ backgroundColor: customization.cart_color }}
+          >
+            <div className="flex flex-col h-full">
+              {/* Cart Header */}
+              <div className="flex items-center justify-between p-4 border-b">
+                <h2 className="text-lg font-semibold">Carrinho de Compras</h2>
+                <Button variant="ghost" size="icon" onClick={() => setIsCartOpen(false)}>
+                  <X className="w-5 h-5" />
+                </Button>
+              </div>
+              {/* Cart Items */}
+              <div className="flex-1 overflow-y-auto p-4">
+                {cart.length === 0 ? (
+                  <div className="text-center text-gray-500 mt-8">
+                    <ShoppingCart className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+                    <p>Seu carrinho está vazio</p>
                   </div>
-                )}
-                {/* Loading State */}
-                {loading && (
-                  <div className="text-center py-8">
-                    <Loader2 className="w-6 h-6 animate-spin mx-auto mb-4 text-primary" />
-                    <p className="text-gray-600">Carregando produtos...</p>
-                  </div>
-                )}
-                {/* Empty State */}
-                {!loading && !error && products.length === 0 && (
-                  <div className="text-center py-8">
-                    <p className="text-gray-600">Nenhum produto cadastrado ainda.</p>
-                  </div>
-                )}
-                {/* Products List */}
-                {!loading && !error && products.length > 0 && (
+                ) : (
                   <div className="space-y-4">
-                    {products.map((product) => (
-                      <div key={product.id} className="border rounded-lg hover:bg-gray-50 overflow-hidden">
-                        {/* Layout Desktop */}
-                        <div className="hidden sm:flex items-center space-x-4 p-4">
-                          <img
-                            src={product.image || "/placeholder.svg"}
-                            alt={product.name}
-                            className="w-16 h-16 object-cover rounded-lg"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-medium text-gray-900 truncate">{product.name}</h4>
-                            <p className="text-sm text-gray-500">{product.category}</p>
-                            <div className="flex items-center space-x-4 mt-1">
-                              <span className="text-primary font-semibold">R$ {product.price.toFixed(2)}</span>
-                              {product.stock && <span className="text-sm text-gray-500">Estoque: {product.stock}</span>}
-                              <Badge variant={product.status === "active" ? "default" : "secondary"}>
-                                {product.status === "active" ? "Ativo" : "Inativo"}
-                              </Badge>
-                            </div>
-                            {/* Tamanhos */}
-                            {product.sizes && product.sizes.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-2">
-                                {product.sizes.map((size, index) => (
-                                  <Badge key={index} variant="outline" className="text-xs">
-                                    {size}
-                                  </Badge>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex items-center space-x-3">
+                    {cart.map((item) => (
+                      <div key={item.id} className="flex items-center space-x-3 bg-gray-50 p-3 rounded-lg">
+                        <img
+                          src={item.image || "/placeholder.svg"}
+                          alt={item.name}
+                          className="w-16 h-16 object-cover rounded"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-sm truncate">{item.name}</h4>
+                          {item.selectedSize && <p className="text-xs text-gray-500">Tamanho: {item.selectedSize}</p>}
+                          <p className="text-primary font-semibold">R$ {item.price.toFixed(2)}</p>
+                          <div className="flex items-center space-x-2 mt-2">
                             <Button
                               size="icon"
-                              variant="ghost"
-                              onClick={() => {
-                                console.log("👆 CLIQUE NO BOTÃO EDITAR")
-                                console.log("👆 Produto no loop atual:", product.id, product.name)
-                                handleEditProduct(product)
-                              }}
-                              title="Editar produto"
+                              variant="outline"
+                              className="w-8 h-8 bg-transparent"
+                              onClick={() => updateQuantity(item.id, item.quantity - 1)}
                             >
-                              <Edit2 className="w-4 h-4" />
+                              <Minus className="w-3 h-3" />
+                            </Button>
+                            <span className="text-sm font-medium w-8 text-center">{item.quantity}</span>
+                            <Button
+                              size="icon"
+                              variant="outline"
+                              className="w-8 h-8 bg-transparent"
+                              onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                            >
+                              <Plus className="w-3 h-3" />
                             </Button>
                             <Button
                               size="icon"
                               variant="ghost"
-                              onClick={() => handleToggleStatus(product.id)}
-                              className={product.status === "active" ? "text-green-600" : "text-gray-500"}
-                              title={product.status === "active" ? "Desativar produto" : "Ativar produto"}
+                              className="w-8 h-8 text-red-500 hover:text-red-700"
+                              onClick={() => removeFromCart(item.id)}
                             >
-                              <Settings className="w-4 h-4" />
+                              <Trash2 className="w-3 h-3" />
                             </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="text-red-500 hover:text-red-700"
-                              onClick={() => handleDeleteProduct(product.id)}
-                              title="Excluir produto"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        </div>
-                        {/* Layout Mobile */}
-                        <div className="sm:hidden p-4">
-                          <div className="flex space-x-3 mb-3">
-                            <img
-                              src={product.image || "/placeholder.svg"}
-                              alt={product.name}
-                              className="w-16 h-16 object-cover rounded-lg flex-shrink-0"
-                            />
-                            <div className="flex-1 min-w-0">
-                              <h4 className="font-medium text-gray-900 text-sm leading-tight">{product.name}</h4>
-                              <p className="text-xs text-gray-500 mt-1">{product.category}</p>
-                              <div className="flex items-center space-x-2 mt-2">
-                                <span className="text-primary font-semibold text-sm">
-                                  R$ {product.price.toFixed(2)}
-                                </span>
-                                <Badge
-                                  variant={product.status === "active" ? "default" : "secondary"}
-                                  className="text-xs"
-                                >
-                                  {product.status === "active" ? "Ativo" : "Inativo"}
-                                </Badge>
-                              </div>
-                            </div>
-                          </div>
-                          {/* Informações adicionais mobile */}
-                          <div className="space-y-2 mb-3">
-                            {product.stock && <div className="text-xs text-gray-500">Estoque: {product.stock}</div>}
-                            {/* Tamanhos mobile */}
-                            {product.sizes && product.sizes.length > 0 && (
-                              <div className="flex flex-wrap gap-1">
-                                {product.sizes.map((size, index) => (
-                                  <Badge key={index} variant="outline" className="text-xs">
-                                    {size}
-                                  </Badge>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          {/* Botões mobile - separados em linha própria */}
-                          <div className="border-t pt-3">
-                            <div className="flex justify-center space-x-6">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => {
-                                  console.log("👆 CLIQUE NO BOTÃO EDITAR")
-                                  console.log("👆 Produto no loop atual:", product.id, product.name)
-                                  handleEditProduct(product)
-                                }}
-                                className="flex flex-col items-center space-y-1 h-auto py-2"
-                              >
-                                <Edit2 className="w-5 h-5" />
-                                <span className="text-xs">Editar</span>
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleToggleStatus(product.id)}
-                                className={`flex flex-col items-center space-y-1 h-auto py-2 ${
-                                  product.status === "active" ? "text-green-600" : "text-gray-500"
-                                }`}
-                              >
-                                <Settings className="w-5 h-5" />
-                                <span className="text-xs">{product.status === "active" ? "Desativar" : "Ativar"}</span>
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-red-500 hover:text-red-700"
-                                onClick={() => handleDeleteProduct(product.id)}
-                                title="Excluir produto"
-                              >
-                                <Trash2 className="w-5 h-5" />
-                                <span className="text-xs">Excluir</span>
-                              </Button>
-                            </div>
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Categories Management */}
-          <div className="mt-8">
-            <Card>
-              <CardHeader>
-                <CardTitle>Gestão de Categorias</CardTitle>
-                <CardDescription>Gerencie as categorias dos produtos</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {/* Add New Category */}
-                <div className="flex space-x-2">
-                  <Input
-                    placeholder="Nome da nova categoria"
-                    value={newCategoryName}
-                    onChange={(e) => setNewCategoryName(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button onClick={handleAddCategory}>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Adicionar
-                  </Button>
-                </div>
-                {/* Categories List */}
-                <div className="space-y-2">
-                  {categories.map((category) => (
-                    <div key={category.id} className="flex items-center justify-between p-3 border rounded-lg">
-                      <div className="flex items-center space-x-3">
-                        <span className="font-medium">{category.name}</span>
-                        <Badge variant={category.is_active ? "default" : "secondary"}>
-                          {category.is_active ? "Ativa" : "Inativa"}
-                        </Badge>
-                      </div>
-                      <div className="flex items-center space-x-3">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => handleToggleCategoryStatus(category.id)}
-                          className={category.is_active ? "text-green-600" : "text-gray-500"}
-                          title={category.is_active ? "Desativar categoria" : "Ativar categoria"}
-                        >
-                          <Settings className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="text-red-500 hover:text-red-700"
-                          onClick={() => handleDeleteCategory(category.id)}
-                          title="Excluir categoria"
-                        >
-                          <Trash2 className="w-4 h-4" />
+              </div>
+              {/* Cart Footer */}
+              {cart.length > 0 && (
+                <div className="border-t p-4 space-y-4">
+                  {/* Seção de Cupom */}
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-semibold">Cupom de Desconto</h3>
+                    {appliedCoupon ? (
+                      <div className="flex items-center justify-between bg-green-50 border border-green-200 p-2 rounded-md">
+                        <span className="text-sm text-green-800">
+                          Cupom "{appliedCoupon.code}" aplicado (
+                          {appliedCoupon.type === "percentage"
+                            ? `${(appliedCoupon.value * 100).toFixed(0)}% OFF`
+                            : `R$ ${appliedCoupon.value.toFixed(2)} OFF`}
+                          )
+                        </span>
+                        <Button variant="ghost" size="icon" onClick={handleRemoveCoupon}>
+                          <X className="w-4 h-4 text-green-800" />
                         </Button>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* WhatsApp Settings */}
-          <div>
-            <Card>
-              <CardHeader>
-                <CardTitle>Configurações da Loja</CardTitle>
-                <CardDescription>Configure nome da loja, WhatsApp e rodapé</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Nome da Loja</label>
-                  <Input
-                    value={tempStoreName}
-                    onChange={(e) => setTempStoreName(e.target.value)}
-                    placeholder="Nome da sua loja"
-                    className="mt-1"
-                    disabled={isSavingSettings} // Ajustado para isSavingSettings
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Número do WhatsApp</label>
-                  <Input
-                    value={tempWhatsappNumber}
-                    onChange={(e) => setTempWhatsappNumber(e.target.value)}
-                    placeholder="(11) 99999-9999"
-                    className="mt-1"
-                    disabled={isSavingSettings} // Ajustado para isSavingSettings
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Texto do Rodapé</label>
-                  <Input
-                    value={tempFooterText}
-                    onChange={(e) => setTempFooterText(e.target.value)}
-                    placeholder="© 2024 Minha Loja. Todos os direitos reservados."
-                    className="mt-1"
-                    disabled={isSavingSettings} // Ajustado para isSavingSettings
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Nome da Empresa no Rodapé</label>
-                  <Input
-                    value={tempFooterCompanyName}
-                    onChange={(e) => setTempFooterCompanyName(e.target.value)}
-                    placeholder="Minha Loja"
-                    className="mt-1"
-                    disabled={isSavingSettings} // Ajustado para isSavingSettings
-                  />
-                </div>
-                {/* NOVOS CAMPOS PARA TÍTULO DA ABA DO NAVEGADOR E FAVICON */}
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Título da Aba do Navegador</label>
-                  <Input
-                    value={tempBrowserTabTitle}
-                    onChange={(e) => setTempBrowserTabTitle(e.target.value)}
-                    placeholder="Título da aba do navegador"
-                    className="mt-1"
-                    disabled={isSavingSettings} // Ajustado para isSavingSettings
-                  />
-                  <p className="text-xs text-gray-500 mt-1">Este texto aparecerá na aba do navegador.</p>
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700">Favicon</label>
-                  <div className="flex items-center space-x-2 mt-1">
-                    <Input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleFaviconChange}
-                      className="flex-1"
-                      disabled={isSavingSettings} // Ajustado para isSavingSettings
-                    />
-                    {tempFaviconUrl && (
-                      <>
-                        <img
-                          src={tempFaviconUrl || "/placeholder.svg"}
-                          alt="Favicon Preview"
-                          className="w-8 h-8 object-contain rounded-md"
+                    ) : (
+                      <div className="flex space-x-2">
+                        <Input
+                          placeholder="Digite seu cupom"
+                          value={couponInput}
+                          onChange={(e) => setCouponInput(e.target.value)}
+                          className="flex-1"
+                          disabled={!isConnected}
                         />
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={handleClearFavicon}
-                          disabled={isSavingSettings} // Ajustado para isSavingSettings
-                          title="Remover Favicon"
-                        >
-                          <XCircle className="w-4 h-4 text-red-500" />
+                        <Button onClick={handleApplyCoupon} disabled={!isConnected}>
+                          Aplicar
                         </Button>
-                      </>
+                      </div>
                     )}
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Selecione uma imagem para usar como favicon. Tamanho recomendado: 32x32 pixels.
-                  </p>
-                  {isSavingSettings && ( // Usar isSavingSettings para indicar processamento
-                    <div className="flex items-center text-sm text-gray-600 mt-2">
-                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                      Salvando configurações...
+                  {/* Fim Seção de Cupom */}
+
+                  <div className="flex justify-between items-center text-lg font-semibold">
+                    <span>Subtotal:</span>
+                    <span>R$ {getTotalPrice().toFixed(2)}</span>
+                  </div>
+                  {appliedCoupon && (
+                    <div className="flex justify-between items-center text-sm text-green-600">
+                      <span>Desconto ({appliedCoupon.code}):</span>
+                      <span>-R$ {getDiscountAmount().toFixed(2)}</span>
                     </div>
                   )}
+                  <div className="flex justify-between items-center text-xl font-bold text-primary">
+                    <span>Total Final:</span>
+                    <span>R$ {getFinalPrice().toFixed(2)}</span>
+                  </div>
+                  <Button
+                    className="w-full"
+                    style={{
+                      backgroundColor: customization.button_color,
+                      color: customization.button_text_color,
+                      border: `1px solid ${customization.button_color}`,
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = darkenColor(customization.button_color, 10)
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = customization.button_color
+                    }}
+                    onClick={() => handleFinalizeOrder("whatsapp")}
+                    disabled={isCheckoutDisabled()} // Adicionado disabled
+                  >
+                    {isCheckoutDisabled() ? "Finalizar (Cupom Esgotado/Offline)" : "Finalizar no WhatsApp"}
+                  </Button>
+                  {/* Botão PIX agora usa o estado de loading */}
+                  <Button
+                    className="w-full bg-transparent"
+                    variant="outline"
+                    onClick={() => handleFinalizeOrder("pix")}
+                    disabled={isCheckoutDisabled() || isGeneratingPix} // Adicionado disabled e isGeneratingPix
+                  >
+                    {isGeneratingPix ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Gerando PIX...
+                      </>
+                    ) : (
+                      <>
+                        <QrCode className="w-4 h-4 mr-2" />
+                        Pagar com PIX
+                      </>
+                    )}
+                  </Button>
                 </div>
-                {/* FIM NOVOS CAMPOS */}
-                <Button
-                  onClick={handleSaveSettings}
-                  disabled={isSavingSettings || settingsLoading} // Removido isUploadingFavicon
-                  className="w-full"
-                >
-                  {isSavingSettings ? "Salvando..." : "Salvar Configurações"}
-                </Button>
-                <div className="text-xs text-gray-500 mt-4">
-                  Clique em "Salvar Configurações" para aplicar as mudanças.
-                </div>
-              </CardContent>
-            </Card>
+              )}
+            </div>
           </div>
-          
         </div>
-
- {/* Separador */}
-        <div className="text-xs text-gray-500 mt-4">
-                  
-                </div>
-        {/* Visual Customization Section */}
-        <VisualCustomization />
-      </div>
-      {/* Product Modal */}
-      <ProductModal
-        isOpen={isProductModalOpen}
-        onClose={() => setIsProductModalOpen(false)}
-        onSave={handleSaveProduct}
-        product={editingProduct}
-        mode={modalMode}
-      />
+      )}
+      {/* PixModal agora recebe os códigos dinâmicos */}
+      {dynamicPixCode && dynamicQrCodeUrl && (
+        <PixModal
+          isOpen={isPixModalOpen}
+          onClose={() => setIsPixModalOpen(false)}
+          pixCode={dynamicPixCode}
+          qrCodeUrl={dynamicQrCodeUrl}
+        />
+      )}
     </div>
   )
 }
