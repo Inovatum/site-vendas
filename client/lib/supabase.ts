@@ -25,6 +25,9 @@ export function getSupabaseClient() {
 // Export a named supabase client for convenience (many files expect this named export)
 export const supabase = getSupabaseClient()
 
+// Re-export helper utilities
+export { formatError } from './errorUtils'
+
 // Utility to debug supabase errors consistently across the app
 export function debugSupabaseError(error: unknown, context?: string) {
   try {
