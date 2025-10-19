@@ -25,6 +25,22 @@ export function getSupabaseClient() {
 // Export a named supabase client for convenience (many files expect this named export)
 export const supabase = getSupabaseClient()
 
+// Utility to debug supabase errors consistently across the app
+export function debugSupabaseError(error: unknown, context?: string) {
+  try {
+    const ctx = context ? `[${context}]` : "[supabase]"
+    console.error(`${ctx} Supabase error:`, error)
+    const errObj: any = (error as any) || {}
+    if (errObj.message) console.error(`${ctx} message:`, errObj.message)
+    if (errObj.code) console.error(`${ctx} code:`, errObj.code)
+    if (errObj.details) console.error(`${ctx} details:`, errObj.details)
+    if (errObj.hint) console.info(`${ctx} hint:`, errObj.hint)
+    if (errObj.requestId) console.info(`${ctx} requestId:`, errObj.requestId)
+  } catch (e) {
+    console.error("[debugSupabaseError] Failed to log error:", e)
+  }
+}
+
 // Type definitions for your database schema
 export interface Product {
   id: number
