@@ -38,6 +38,9 @@ export function useStoreSettings() {
     setLoading(true)
     setError(null)
     try {
+      console.log('DEBUG: supabaseUrl present?', (await import('@/lib/supabase')).supabaseUrl ? true : false)
+      console.log('DEBUG: supabaseAnonKey present?', (await import('@/lib/supabase')).supabaseAnonKey ? true : false)
+
       const { data, error } = await supabase.from("store_settings").select("*").limit(1).single()
 
       if (error) {
