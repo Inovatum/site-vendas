@@ -4,12 +4,9 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js"
 // For server-side operations (e.g., Server Actions, Route Handlers),
 // use the service role key or a separate client with appropriate authentication.
 
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL ??
-  (typeof import !== "undefined" ? (import.meta as any)?.env?.VITE_SUPABASE_URL ?? (import.meta as any)?.env?.NEXT_PUBLIC_SUPABASE_URL : undefined)
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
-  (typeof import !== "undefined" ? (import.meta as any)?.env?.VITE_SUPABASE_ANON_KEY ?? (import.meta as any)?.env?.NEXT_PUBLIC_SUPABASE_ANON_KEY : undefined)
+const metaEnv = (import.meta as any).env;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? metaEnv?.VITE_SUPABASE_URL ?? metaEnv?.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? metaEnv?.VITE_SUPABASE_ANON_KEY ?? metaEnv?.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error("Missing Supabase environment variables.")
