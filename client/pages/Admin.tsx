@@ -15,6 +15,9 @@ import { supabase, supabaseUrl as SUPABASE_URL, supabaseAnonKey as SUPABASE_ANON
 import type { Product } from "@/lib/supabase"
 import { useToast } from "@/hooks/use-toast"
 import PixModal from "@/components/PixModal"
+import { useEffect } from "react"
+import { useNavigate } from "react-router-dom"
+import { useAdminAuth } from "@/hooks/useAdminAuth"
 
 interface CartItem extends Product {
   quantity: number
@@ -670,7 +673,7 @@ export default function Index() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Nossos Produtos</h1>
-          <p className="text-gray-600">Descubra as últimas tendências da moda e perfumes exclusivos</p>
+          <p className="text-gray-600">Descubra as últimas tend��ncias da moda e perfumes exclusivos</p>
           {/* Connection Status */}
           {!isConnected && (
             <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
