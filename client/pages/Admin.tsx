@@ -11,7 +11,7 @@ import { useStoreSettings } from "@/hooks/useStoreSettings"
 import { useStoreCustomization } from "@/hooks/useStoreCustomization"
 import { useCategories } from "@/hooks/useCategories"
 import DynamicStyles from "@/components/DynamicStyles"
-import { supabase } from "@/lib/supabase" // Importar supabase client
+import { supabase, supabaseUrl as SUPABASE_URL, supabaseAnonKey as SUPABASE_ANON_KEY } from "@/lib/supabase" // Importar supabase client and envs
 import type { Product } from "@/lib/supabase"
 import { useToast } from "@/hooks/use-toast"
 import PixModal from "@/components/PixModal"
