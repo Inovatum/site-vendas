@@ -18,7 +18,20 @@ let _supabase: SupabaseClient | null = null
 
 export function getSupabaseClient() {
   if (!_supabase) {
-    _supabase = createClient(supabaseUrl!, supabaseAnonKey!)
+    if (!supabaseUrl || !supabaseAnonKey) {
+      console.error("Supabase client not created: missing URL or ANON key.")
+      const errMsg = "Supabase not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY (or NEXT_PUBLIC_ variants)."
+      // Create a proxy that throws on any access to provide clearer runtime errors
+      _supabase = new Proxy({}, {
+        get() {
+          return () => {
+            throw new Error(errMsg)
+          }
+        },
+      }) as unknown as SupabaseClient
+    } else {
+      _supabase = createClient(supabaseUrl, supabaseAnonKey)
+    }
   }
   return _supabase
 }
