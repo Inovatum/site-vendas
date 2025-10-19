@@ -1,25 +1,32 @@
-import { createClient } from "@supabase/supabase-js"
+import { createClient, SupabaseClient } from "@supabase/supabase-js"
 
 // Note: Supabase client for client-side operations (e.g., fetching public data)
 // For server-side operations (e.g., Server Actions, Route Handlers),
 // use the service role key or a separate client with appropriate authentication.
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL ??
+  (typeof import !== "undefined" ? (import.meta as any)?.env?.VITE_SUPABASE_URL ?? (import.meta as any)?.env?.NEXT_PUBLIC_SUPABASE_URL : undefined)
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+  (typeof import !== "undefined" ? (import.meta as any)?.env?.VITE_SUPABASE_ANON_KEY ?? (import.meta as any)?.env?.NEXT_PUBLIC_SUPABASE_ANON_KEY : undefined)
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error("Missing Supabase environment variables.")
 }
 
 // Singleton pattern for client-side Supabase client
-let supabase: ReturnType<typeof createClient> | null = null
+let _supabase: SupabaseClient | null = null
 
 export function getSupabaseClient() {
-  if (!supabase) {
-    supabase = createClient(supabaseUrl!, supabaseAnonKey!)
+  if (!_supabase) {
+    _supabase = createClient(supabaseUrl!, supabaseAnonKey!)
   }
-  return supabase
+  return _supabase
 }
+
+// Export a named supabase client for convenience (many files expect this named export)
+export const supabase = getSupabaseClient()
 
 // Type definitions for your database schema
 export interface Product {
